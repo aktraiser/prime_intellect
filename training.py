@@ -4,7 +4,7 @@ from unsloth import FastLanguageModel, is_bfloat16_supported
 import torch
 from trl import SFTTrainer
 from transformers import TrainingArguments
-from peft import PeftModel  # Modification ici
+from peft import PeftModel  # Import correct de PeftModel
 import time
 
 torch.cuda.empty_cache()
@@ -81,7 +81,7 @@ def initialize_trainer(model, tokenizer, dataset, max_seq_length):
             per_device_train_batch_size=2,
             gradient_accumulation_steps=4,
             warmup_steps=5,
-            max_steps=100,
+            max_steps=1000,
             learning_rate=2e-4,
             fp16=not is_bfloat16_supported(),
             bf16=is_bfloat16_supported(),
@@ -122,7 +122,7 @@ if __name__ == "__main__":
 
     # Fusion des poids LoRA avec le modèle de base
     print("Fusion des poids LoRA avec le modèle de base...")
-    peft_model = PeftModel.from_pretrained(model, "outputs")  # Correction ici
+    peft_model = PeftModel.from_pretrained(model, "outputs")  # Utilisation correcte de from_pretrained
     merged_model = peft_model.merge_and_unload()
 
     # Sauvegarde du modèle et du tokenizer au format safetensors
