@@ -4,13 +4,13 @@ from unsloth import FastLanguageModel, is_bfloat16_supported
 import torch
 from trl import SFTTrainer
 from transformers import TrainingArguments
-from peft import PeftModel  # Import correct de PeftModel
+from peft import PeftModel
 import time
 
 torch.cuda.empty_cache()
 
 def initialize_model(max_seq_length, load_in_4bit=True):
-    dtype = None  # Détection automatique. Float16 pour Tesla T4, V100, Bfloat16 pour Ampere+
+    dtype = None  # Détection automatique
 
     model, tokenizer = FastLanguageModel.from_pretrained(
         model_name="unsloth/Meta-Llama-3.1-8B",
@@ -25,7 +25,7 @@ def initialize_model(max_seq_length, load_in_4bit=True):
         target_modules=["q_proj", "k_proj", "v_proj", "o_proj",
                         "gate_proj", "up_proj", "down_proj"],
         lora_alpha=16,
-        lora_dropout=0,  # Supporte n'importe quelle valeur, mais 0 est optimisé
+        lora_dropout=0,  # 0 est optimisé
         bias="none",
         use_gradient_checkpointing="unsloth",
         random_state=3407,
@@ -42,14 +42,14 @@ def initialize_dataset(tokenizer, csv_file):
     # Définir le format du prompt
     prompt_template = """Vous êtes un expert en fiscalité. Répondez à la question suivante en vous basant sur le texte fourni.
 
-    ### Texte principal:
-    {texte}
+### Texte principal:
+{texte}
 
-    ### Question:
-    {question}
+### Question:
+{question}
 
-    ### Réponse:
-    """
+### Réponse:
+"""
 
     EOS_TOKEN = tokenizer.eos_token
 
@@ -91,6 +91,9 @@ def initialize_trainer(model, tokenizer, dataset, max_seq_length):
             lr_scheduler_type="linear",
             seed=3407,
             output_dir="outputs",
+            save_strategy="steps",
+            save_steps=100,  # Sauvegarder à la fin de l'entraînement
+            save_total_limit=1,  # Garder uniquement le dernier point de contrôle
         ),
     )
 
@@ -120,12 +123,15 @@ if __name__ == "__main__":
     # Entraînement
     trainer.train()
 
+    # Sauvegarde du modèle LoRA
+    trainer.save_model()
+
     # Fusion des poids LoRA avec le modèle de base
     print("Fusion des poids LoRA avec le modèle de base...")
-    peft_model = PeftModel.from_pretrained(model, "outputs")  # Utilisation correcte de from_pretrained
+    peft_model = PeftModel.from_pretrained(model, "outputs")
     merged_model = peft_model.merge_and_unload()
 
-    # Sauvegarde du modèle et du tokenizer au format safetensors
+    # Sauvegarde du modèle fusionné et du tokenizer au format safetensors
     merged_model.save_pretrained("llama_model_merged", safe_serialization=True)
     tokenizer.save_pretrained("llama_model_merged")
     print("Modèle fusionné et sauvegardé au format safetensors.")
@@ -133,11 +139,11 @@ if __name__ == "__main__":
     # Validation locale
     print("Validation locale du modèle sauvegardé...")
     from transformers import AutoModelForCausalLM, AutoTokenizer
-    merged_model = AutoModelForCausalLM.from_pretrained("llama_model_merged")
+    merged_model = AutoModelForCausalLM.from_pretrained("llama_model_merged", device_map="auto")
     merged_tokenizer = AutoTokenizer.from_pretrained("llama_model_merged")
 
     # Test simple
-    inputs = merged_tokenizer("Ceci est un test.", return_tensors="pt").input_ids
+    inputs = merged_tokenizer("Ceci est un test.", return_tensors="pt").input_ids.to('cuda')
     outputs = merged_model.generate(inputs, max_new_tokens=50)
     print("Exemple de génération :", merged_tokenizer.decode(outputs[0]))
 
