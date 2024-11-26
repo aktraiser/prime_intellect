@@ -122,13 +122,13 @@ if __name__ == "__main__":
 
     # Fusion des poids LoRA avec le modèle de base
     print("Fusion des poids LoRA avec le modèle de base...")
-    peft_model = PeftModel(model, model_name="outputs")  # Assurez-vous que "outputs" correspond au chemin de votre modèle PEFT
+    peft_model = PeftModel.from_pretrained(model, "outputs")  # Correction ici
     merged_model = peft_model.merge_and_unload()
 
-    # Sauvegarde du modèle et du tokenizer
-    merged_model.save_pretrained("llama_model_merged")
+    # Sauvegarde du modèle et du tokenizer au format safetensors
+    merged_model.save_pretrained("llama_model_merged", safe_serialization=True)
     tokenizer.save_pretrained("llama_model_merged")
-    print("Modèle fusionné et sauvegardé.")
+    print("Modèle fusionné et sauvegardé au format safetensors.")
 
     # Validation locale
     print("Validation locale du modèle sauvegardé...")
