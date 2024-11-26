@@ -4,20 +4,19 @@ from unsloth import FastLanguageModel, is_bfloat16_supported
 import torch
 from trl import SFTTrainer
 from transformers import TrainingArguments
+from peft import merge_lora_weights  # Pour fusionner LoRA avec le modèle de base
 import time
 
 torch.cuda.empty_cache()
 
-def initialize_model(max_seq_length):
+def initialize_model(max_seq_length, load_in_4bit=True):
     dtype = None  # Détection automatique. Float16 pour Tesla T4, V100, Bfloat16 pour Ampere+
-    load_in_4bit = True  # Utiliser la quantification 4 bits pour réduire l'utilisation de la mémoire. Peut être False.
 
     model, tokenizer = FastLanguageModel.from_pretrained(
         model_name="unsloth/Meta-Llama-3.1-8B",
         max_seq_length=max_seq_length,
         dtype=dtype,
         load_in_4bit=load_in_4bit,
-        # token="hf_...",  # Utiliser un token si vous utilisez des modèles restreints comme meta-llama/Llama-2-7b-hf
     )
 
     model = FastLanguageModel.get_peft_model(
@@ -27,12 +26,11 @@ def initialize_model(max_seq_length):
                         "gate_proj", "up_proj", "down_proj"],
         lora_alpha=16,
         lora_dropout=0,  # Supporte n'importe quelle valeur, mais 0 est optimisé
-        bias="none",     # Supporte n'importe quelle valeur, mais "none" est optimisé
-        # [NOUVEAU] "unsloth" utilise 30% moins de VRAM, permet des batchs 2x plus grands !
-        use_gradient_checkpointing="unsloth",  # True ou "unsloth" pour un contexte très long
+        bias="none",
+        use_gradient_checkpointing="unsloth",
         random_state=3407,
-        use_rslora=False,  # Supporte Rank Stabilized LoRA
-        loftq_config=None,  # Et LoftQ
+        use_rslora=False,
+        loftq_config=None,
     )
 
     return model, tokenizer
@@ -53,17 +51,9 @@ def initialize_dataset(tokenizer, csv_file):
     ### Réponse:
     """
 
-    EOS_TOKEN = tokenizer.eos_token  # Doit ajouter EOS_TOKEN
+    EOS_TOKEN = tokenizer.eos_token
 
-    # Fonction pour formater les données
-    def format_data(row):
-        texte = row['Texte principal']
-        question = row['Questions']
-        reponse = row['Réponses']
-        prompt = prompt_template.format(texte=texte, question=question) + reponse + EOS_TOKEN
-        return {'text': prompt}
-
-    # Create a list of formatted prompts
+    # Formater les données
     formatted_data = []
     for _, row in df.iterrows():
         formatted_data.append({
@@ -73,7 +63,7 @@ def initialize_dataset(tokenizer, csv_file):
             ) + row['Réponses'] + EOS_TOKEN
         })
     
-    # Convert to dataset Hugging Face
+    # Convertir en dataset Hugging Face
     dataset = Dataset.from_dict({'text': [d['text'] for d in formatted_data]})
 
     return dataset
@@ -91,7 +81,6 @@ def initialize_trainer(model, tokenizer, dataset, max_seq_length):
             per_device_train_batch_size=2,
             gradient_accumulation_steps=4,
             warmup_steps=5,
-            # num_train_epochs=1,  # Définir pour un entraînement complet.
             max_steps=1000,
             learning_rate=2e-4,
             fp16=not is_bfloat16_supported(),
@@ -110,37 +99,46 @@ def initialize_trainer(model, tokenizer, dataset, max_seq_length):
 if __name__ == "__main__":
     start_time = time.time()
     max_seq_length = 2048
-    model, tokenizer = initialize_model(max_seq_length)
+    load_in_4bit = True  # Définir sur False si des problèmes liés à `bitsandbytes` apparaissent
 
-    # Spécifiez le chemin vers votre fichier CSV
+    model, tokenizer = initialize_model(max_seq_length, load_in_4bit)
+
+    # Charger les données
     csv_file = 'dataset_conseils_entreprises.csv'
     dataset = initialize_dataset(tokenizer, csv_file)
 
+    # Initialiser le formateur
     trainer = initialize_trainer(model, tokenizer, dataset, max_seq_length)
 
-    # Afficher les statistiques de mémoire GPU actuelles
+    # Statistiques mémoire GPU
     gpu_stats = torch.cuda.get_device_properties(0)
     start_gpu_memory = round(torch.cuda.max_memory_reserved() / 1024 / 1024 / 1024, 3)
     max_memory = round(gpu_stats.total_memory / 1024 / 1024 / 1024, 3)
     print(f"GPU = {gpu_stats.name}. Mémoire maximale = {max_memory} GB.")
     print(f"{start_gpu_memory} GB de mémoire réservée.")
 
+    # Entraînement
     trainer.train()
 
-    end_time = time.time()
-    # Afficher les statistiques finales de mémoire et de temps
-    used_memory = round(torch.cuda.max_memory_reserved() / 1024 / 1024 / 1024, 3)
-    used_memory_for_lora = round(used_memory - start_gpu_memory, 3)
-    used_percentage = round(used_memory / max_memory * 100, 3)
-    lora_percentage = round(used_memory_for_lora / max_memory * 100, 3)
-    print(f"{end_time - start_time} secondes utilisées pour l'entraînement.")
-    print(f"{round((end_time - start_time) / 60, 2)} minutes utilisées pour l'entraînement.")
-    print(f"Pic de mémoire réservée = {used_memory} GB.")
-    print(f"Pic de mémoire réservée pour l'entraînement = {used_memory_for_lora} GB.")
-    print(f"Pourcentage de mémoire réservée par rapport à la mémoire maximale = {used_percentage} %.")
-    print(f"Pourcentage de mémoire réservée pour l'entraînement par rapport à la mémoire maximale = {lora_percentage} %.")
+    # Fusion des poids LoRA avec le modèle de base
+    print("Fusion des poids LoRA avec le modèle de base...")
+    model = merge_lora_weights(model)
 
-    model.save_pretrained("llama_model")  # Sauvegarde locale
-    tokenizer.save_pretrained("llama_model")
-    # model.push_to_hub("votre_nom/lora_model", token="...")  # Sauvegarde en ligne
-    # tokenizer.push_to_hub("votre_nom/lora_model", token="...")  # Sauvegarde en ligne
+    # Sauvegarde du modèle et du tokenizer
+    model.save_pretrained("llama_model_merged")
+    tokenizer.save_pretrained("llama_model_merged")
+    print("Modèle fusionné et sauvegardé.")
+
+    # Validation locale
+    print("Validation locale du modèle sauvegardé...")
+    from transformers import AutoModelForCausalLM, AutoTokenizer
+    merged_model = AutoModelForCausalLM.from_pretrained("llama_model_merged")
+    merged_tokenizer = AutoTokenizer.from_pretrained("llama_model_merged")
+
+    # Test simple
+    inputs = merged_tokenizer("Ceci est un test.", return_tensors="pt").input_ids
+    outputs = merged_model.generate(inputs, max_new_tokens=50)
+    print("Exemple de génération :", merged_tokenizer.decode(outputs[0]))
+
+    end_time = time.time()
+    print(f"{end_time - start_time} secondes utilisées pour l'entraînement et la fusion.")
