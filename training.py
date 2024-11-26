@@ -4,7 +4,7 @@ from unsloth import FastLanguageModel, is_bfloat16_supported
 import torch
 from trl import SFTTrainer
 from transformers import TrainingArguments
-from peft import merge_lora_weights  # Pour fusionner LoRA avec le modèle de base
+from peft import PeftModel  # Modification ici
 import time
 
 torch.cuda.empty_cache()
@@ -122,10 +122,11 @@ if __name__ == "__main__":
 
     # Fusion des poids LoRA avec le modèle de base
     print("Fusion des poids LoRA avec le modèle de base...")
-    model = merge_lora_weights(model)
+    peft_model = PeftModel(model, model_name="outputs")  # Assurez-vous que "outputs" correspond au chemin de votre modèle PEFT
+    merged_model = peft_model.merge_and_unload()
 
     # Sauvegarde du modèle et du tokenizer
-    model.save_pretrained("llama_model_merged")
+    merged_model.save_pretrained("llama_model_merged")
     tokenizer.save_pretrained("llama_model_merged")
     print("Modèle fusionné et sauvegardé.")
 
