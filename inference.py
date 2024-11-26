@@ -24,17 +24,8 @@ def initialize_model(max_seq_length):
     model.eval()  # Mettre le modèle en mode évaluation
     return model, tokenizer
 
-def evaluate_model(model, tokenizer):
-    # Vos données de test
-    data = [
-        {
-            "Texte principal": "L'imposition à l'IS est optionnelle pour les cas suivants : l'entrepreneur individuel en EIRL, l'entrepreneur individuel (EI)...",
-            "Questions": "Est-ce que l'imposition à l'IS peut être optionnelle ?",
-        },
-        # Ajoutez d'autres entrées de test ici
-    ]
-
-    prompt_template = """Vous êtes un expert en fiscalité. Répondez à la question suivante en vous basant sur le texte fourni.
+def interactive_evaluation(model, tokenizer):
+    prompt_template = """Tu es un expert en fiscalité, comptabilité, ton objectif et d'accompagner les entreprises dans leur enjeux. 
 
 ### Texte principal:
 {texte}
@@ -44,10 +35,11 @@ def evaluate_model(model, tokenizer):
 
 ### Réponse:
 """
-
-    for item in data:
-        texte = item["Texte principal"]
-        question = item["Questions"]
+    while True:
+        texte = input("Entrez le texte principal (ou 'exit' pour quitter) : ")
+        if texte.lower() == 'exit':
+            break
+        question = input("Entrez la question : ")
         prompt = prompt_template.format(texte=texte, question=question)
         input_ids = tokenizer.encode(prompt, return_tensors='pt').to(model.device)
         output_ids = model.generate(
@@ -60,11 +52,5 @@ def evaluate_model(model, tokenizer):
             use_cache=True,
         )
         output_text = tokenizer.decode(output_ids[0][input_ids.shape[-1]:], skip_special_tokens=True)
-        print("Question:", question)
         print("Réponse:", output_text)
         print("-" * 80)
-
-if __name__ == "__main__":
-    max_seq_length = 2048
-    model, tokenizer = initialize_model(max_seq_length)
-    evaluate_model(model, tokenizer)
