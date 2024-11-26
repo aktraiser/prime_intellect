@@ -129,18 +129,26 @@ if __name__ == "__main__":
     # Fusion des poids LoRA avec le modèle de base
     print("Fusion des poids LoRA avec le modèle de base...")
     peft_model = PeftModel.from_pretrained(model, "outputs")
-    merged_model = peft_model.merge_and_unload()
+    peft_model.merge_and_unload()
+
+    # Avant de sauvegarder, assurez-vous que le modèle a l'attribut max_seq_length
+    peft_model.base_model.max_seq_length = max_seq_length
 
     # Sauvegarde du modèle fusionné et du tokenizer au format safetensors
-    merged_model.save_pretrained("llama_model_merged", safe_serialization=True)
+    peft_model.base_model.save_pretrained("llama_model_merged", safe_serialization=True)
     tokenizer.save_pretrained("llama_model_merged")
     print("Modèle fusionné et sauvegardé au format safetensors.")
 
     # Validation locale
     print("Validation locale du modèle sauvegardé...")
-    from transformers import AutoModelForCausalLM, AutoTokenizer
-    merged_model = AutoModelForCausalLM.from_pretrained("llama_model_merged", device_map="auto")
-    merged_tokenizer = AutoTokenizer.from_pretrained("llama_model_merged")
+    from unsloth import FastLanguageModel
+
+    # Charger le modèle fusionné en utilisant unsloth
+    merged_model, merged_tokenizer = FastLanguageModel.from_pretrained(
+        model_name="llama_model_merged",
+        max_seq_length=max_seq_length,
+        load_in_4bit=False,  # Assurez-vous de mettre False si vous avez sauvegardé en pleine précision
+    )
 
     # Test simple
     inputs = merged_tokenizer("Ceci est un test.", return_tensors="pt").input_ids.to('cuda')
