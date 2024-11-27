@@ -26,16 +26,19 @@ def initialize_model(max_seq_length):
     # Appliquer LoRA au modèle
     model = FastLanguageModel.get_peft_model(
         model,
-        r=16,  # Choisissez un nombre > 0 ! Suggéré : 8, 16, 32, 64, 128
-        target_modules=["q_proj", "k_proj", "v_proj", "o_proj",
-                        "gate_proj", "up_proj", "down_proj"],
-        lora_alpha=16,
-        lora_dropout=0,  # 0 est optimisé
-        bias="none",     # "none" est optimisé
-        use_gradient_checkpointing="unsloth",  # "unsloth" pour un contexte très long
+        r=8,  # Réduit à 8 pour plus de stabilité
+        target_modules=[
+            "q_proj",
+            "k_proj", 
+            "v_proj",
+            "o_proj"
+        ],  # Simplifié pour focus sur l'attention
+        lora_alpha=8,
+        lora_dropout=0,
+        bias="none",
+        use_gradient_checkpointing=True,  # Important pour la stabilité
         random_state=3407,
-        use_rslora=False,   # Nous supportons Rank Stabilized LoRA
-        loftq_config=None,  # Et LoftQ
+        use_rslora=False,
     )
 
     return model, tokenizer
@@ -81,25 +84,26 @@ def initialize_trainer(model, tokenizer, dataset, max_seq_length):
         dataset_text_field="text",
         max_seq_length=max_seq_length,
         dataset_num_proc=2,
-        packing=False,  # Peut accélérer l'entraînement pour les séquences courtes
+        packing=False,
         args=TrainingArguments(
-            per_device_train_batch_size=2,
-            gradient_accumulation_steps=4,
-            warmup_steps=5,
-            # num_train_epochs=1,  # Définir ceci pour un entraînement complet
-            max_steps=1000,
-            learning_rate=2e-4,
-            fp16=not is_bfloat16_supported(),
-            bf16=is_bfloat16_supported(),
+            per_device_train_batch_size=1,
+            gradient_accumulation_steps=16,  # Augmenté pour compenser batch_size=1
+            warmup_steps=10,
+            max_steps=100,
+            learning_rate=1e-4,  # Réduit pour plus de stabilité
+            fp16=False,  # Désactivé pour éviter les problèmes numériques
+            bf16=True,  # Utilisé si disponible
             logging_steps=1,
             optim="adamw_8bit",
             weight_decay=0.01,
-            lr_scheduler_type="linear",
+            lr_scheduler_type="cosine",  # Changé pour une meilleure convergence
             seed=3407,
             output_dir="outputs",
+            gradient_checkpointing=True,
+            torch_compile=False,  # Désactivé pour éviter les problèmes de compilation
+            max_grad_norm=1.0,  # Ajouté pour la stabilité
         ),
     )
-
     return trainer
 
 if __name__ == "__main__":
