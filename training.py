@@ -26,27 +26,28 @@ def initialize_model(max_seq_length):
         trust_remote_code=True
     )
 
-    # Configuration LoRA optimisée
+    # Configuration LoRA optimisée pour Unsloth
     model = FastLanguageModel.get_peft_model(
         model,
-        r=16,  # Augmenté pour une meilleure capacité d'apprentissage
+        r=16,  # Rang de la matrice LoRA
         target_modules=[
             "q_proj",
             "k_proj", 
             "v_proj",
             "o_proj",
-            "gate_proj",  # Ajout des projections supplémentaires
-            "up_proj",    # pour une meilleure adaptation
+            "gate_proj",
+            "up_proj",
             "down_proj"
         ],
-        lora_alpha=32,    # Augmenté pour un meilleur scaling
-        lora_dropout=0.1, # Léger dropout pour la régularisation
+        lora_alpha=32,    # Scaling factor
+        lora_dropout=0.0, # Unsloth recommande 0.0 pour de meilleures performances
         bias="none",
         use_gradient_checkpointing=True,
         random_state=3407,
-        use_rslora=True,  # Activation de rank-stabilized LoRA
-        target_r=8,       # Rang cible final
-        loftq_config={    # Configuration LoFTQ pour une meilleure quantization
+        use_rslora=True,  # Rank-stabilized LoRA
+        # Suppression de target_r qui n'est pas supporté
+        # Ajout des configurations LoFTQ
+        loftq_config={
             "loftq_bits": 4,
             "loftq_iter": 1
         }
