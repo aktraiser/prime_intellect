@@ -81,7 +81,7 @@ def initialize_trainer(model, tokenizer, dataset, max_seq_length):
             per_device_train_batch_size=2,
             gradient_accumulation_steps=4,
             warmup_steps=5,
-            max_steps=1000,
+            max_steps=100,
             learning_rate=2e-4,
             fp16=not is_bfloat16_supported(),
             bf16=is_bfloat16_supported(),
@@ -122,7 +122,7 @@ if __name__ == "__main__":
 
     # Fusion des poids LoRA avec le modèle de base
     print("Fusion des poids LoRA avec le modèle de base...")
-    peft_model = PeftModel.from_pretrained(model, "outputs")  # Utilisation correcte de from_pretrained
+    peft_model = PeftModel.from_pretrained(model, "./outputs")  # Utilisation d'un chemin local
     merged_model = peft_model.merge_and_unload()
 
     # Sauvegarde du modèle et du tokenizer au format safetensors
@@ -135,13 +135,14 @@ if __name__ == "__main__":
     from transformers import AutoModelForCausalLM, AutoTokenizer
     from unsloth import FastLanguageModel
 
+    # Charger le modèle fusionné et le tokenizer
     merged_model = AutoModelForCausalLM.from_pretrained("llama_model_merged")
     merged_tokenizer = AutoTokenizer.from_pretrained("llama_model_merged")
 
     # Préparer le modèle pour l'inférence avec Unsloth
     FastLanguageModel.for_inference(merged_model)
 
-    # Test simple
+    # Test simple de génération
     inputs = merged_tokenizer("Ceci est un test.", return_tensors="pt").input_ids
     outputs = merged_model.generate(inputs, max_new_tokens=50)
     print("Exemple de génération :", merged_tokenizer.decode(outputs[0]))
