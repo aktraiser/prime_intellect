@@ -87,7 +87,7 @@ def initialize_trainer(model, tokenizer, dataset, max_seq_length):
             gradient_accumulation_steps=4,
             warmup_steps=5,
             # num_train_epochs=1,  # Définir ceci pour un entraînement complet
-            max_steps=60,
+            max_steps=1000,
             learning_rate=2e-4,
             fp16=not is_bfloat16_supported(),
             bf16=is_bfloat16_supported(),
