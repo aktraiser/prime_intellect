@@ -81,7 +81,7 @@ def initialize_trainer(model, tokenizer, dataset, max_seq_length):
             per_device_train_batch_size=2,
             gradient_accumulation_steps=4,
             warmup_steps=5,
-            max_steps=10,
+            max_steps=100,
             learning_rate=2e-4,
             fp16=not is_bfloat16_supported(),
             bf16=is_bfloat16_supported(),
@@ -135,7 +135,7 @@ if __name__ == "__main__":
     FastLanguageModel.for_inference(merged_model)
 
     # Sauvegarde du modèle fusionné et du tokenizer
-    FastLanguageModel.save_pretrained(merged_model, "llama_model_merged", safe_serialization=True)
+    merged_model.save_pretrained("llama_model_merged", safe_serialization=True)
     tokenizer.save_pretrained("llama_model_merged")
     print("Modèle fusionné et sauvegardé.")
 
