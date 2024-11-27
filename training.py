@@ -21,24 +21,35 @@ def initialize_model(max_seq_length):
         dtype=dtype,
         load_in_4bit=load_in_4bit,
         # token="hf_...",  # Utiliser si nécessaire pour les modèles protégés
+        use_flash_attention=True,
+        rope_scaling={"type": "dynamic", "factor": 2.0},
+        trust_remote_code=True
     )
 
     # Appliquer LoRA au modèle
     model = FastLanguageModel.get_peft_model(
         model,
-        r=8,  # Réduit à 8 pour plus de stabilité
+        r=16,  # Augmenté pour une meilleure capacité d'apprentissage
         target_modules=[
             "q_proj",
             "k_proj", 
             "v_proj",
-            "o_proj"
-        ],  # Simplifié pour focus sur l'attention
-        lora_alpha=8,
-        lora_dropout=0,
+            "o_proj",
+            "gate_proj",  # Ajout des projections supplémentaires
+            "up_proj",    # pour une meilleure adaptation
+            "down_proj"
+        ],
+        lora_alpha=32,    # Augmenté pour un meilleur scaling
+        lora_dropout=0.1, # Léger dropout pour la régularisation
         bias="none",
-        use_gradient_checkpointing=True,  # Important pour la stabilité
+        use_gradient_checkpointing=True,
         random_state=3407,
-        use_rslora=False,
+        use_rslora=True,  # Activation de rank-stabilized LoRA
+        target_r=8,       # Rang cible final
+        loftq_config={    # Configuration LoFTQ pour une meilleure quantization
+            "loftq_bits": 4,
+            "loftq_iter": 1
+        }
     )
 
     return model, tokenizer
@@ -106,6 +117,19 @@ def initialize_trainer(model, tokenizer, dataset, max_seq_length):
     )
     return trainer
 
+def save_model(model, tokenizer, output_dir):
+    # Supprimer les attributs spécifiques à l'entraînement
+    if hasattr(model, 'module'):
+        model = model.module
+    
+    # Sauvegarder avec la configuration complète
+    model.save_pretrained(
+        output_dir,
+        safe_serialization=True,
+        max_shard_size="10GB"
+    )
+    tokenizer.save_pretrained(output_dir)
+
 if __name__ == "__main__":
     start_time = time.time()
     max_seq_length = 2048
@@ -140,12 +164,10 @@ if __name__ == "__main__":
     print(f"Peak reserved memory for training % of max memory = {lora_percentage} %.")
 
     # Sauvegarder l'adaptateur LoRA
-    model.save_pretrained('peft_model')
-    tokenizer.save_pretrained('peft_model')
+    save_model(model, tokenizer, 'peft_model')
 
     # Fusionner les poids LoRA avec le modèle de base et sauvegarder
     merged_model = model.merge_and_unload()
-    merged_model.save_pretrained("llama_model_merged")
-    tokenizer.save_pretrained("llama_model_merged")
+    save_model(merged_model, tokenizer, 'llama_model_merged')
 
     print("Modèle fusionné et sauvegardé avec succès.")
