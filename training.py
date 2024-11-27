@@ -140,11 +140,8 @@ if __name__ == "__main__":
     tokenizer.save_pretrained('peft_model')
 
     # Fusionner les poids LoRA avec le modèle de base et sauvegarder
-    FastLanguageModel.save_pretrained_merged(
-        model,
-        "llama_model_merged",
-        tokenizer,
-        save_method="merged_16bit"
-    )
+    merged_model = model.merge_and_unload()
+    merged_model.save_pretrained("llama_model_merged")
+    tokenizer.save_pretrained("llama_model_merged")
 
     print("Modèle fusionné et sauvegardé avec succès.")
