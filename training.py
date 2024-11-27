@@ -12,21 +12,21 @@ torch.cuda.empty_cache()
 
 def initialize_model(max_seq_length):
     dtype = None  # None for auto detection. Float16 for Tesla T4, V100, Bfloat16 for Ampere+
-    load_in_4bit = True  # Use 4bit quantization to reduce memory usage. Can be False.
+    load_in_4bit = True  # Use 4bit quantization to reduce memory usage
 
-    # Charger le modèle de base
+    # Charger le modèle de base avec la configuration mise à jour
     model, tokenizer = FastLanguageModel.from_pretrained(
         model_name="unsloth/Meta-Llama-3.1-8B",
         max_seq_length=max_seq_length,
         dtype=dtype,
         load_in_4bit=load_in_4bit,
-        # token="hf_...",  # Utiliser si nécessaire pour les modèles protégés
-        use_flash_attention=True,
+        # Remplacer use_flash_attention par attn_implementation
+        attn_implementation="flash_attention_2",
         rope_scaling={"type": "dynamic", "factor": 2.0},
         trust_remote_code=True
     )
 
-    # Appliquer LoRA au modèle
+    # Configuration LoRA optimisée
     model = FastLanguageModel.get_peft_model(
         model,
         r=16,  # Augmenté pour une meilleure capacité d'apprentissage
