@@ -126,9 +126,11 @@ def save_model(model, tokenizer, output_dir):
     # Sauvegarder avec la configuration complète
     model.save_pretrained(
         output_dir,
-        safe_serialization=True,
-        max_shard_size="10GB"
+        safe_serialization=True,  # Utilise safetensors
+        max_shard_size="5GB"      # Fractionne en fichiers de 5GB maximum
     )
+    
+    # Sauvegarder le tokenizer et ses fichiers de configuration
     tokenizer.save_pretrained(output_dir)
 
 if __name__ == "__main__":
