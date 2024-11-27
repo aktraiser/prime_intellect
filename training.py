@@ -9,8 +9,8 @@ import time
 
 torch.cuda.empty_cache()
 
-def initialize_model(max_seq_length, load_in_4bit=True):
-    dtype = None  # Détection automatique
+def initialize_model(max_seq_length, load_in_4bit=False):
+    dtype = torch.float16  # Utiliser float16 pour la pleine précision
 
     model, tokenizer = FastLanguageModel.from_pretrained(
         model_name="unsloth/Meta-Llama-3.1-8B",
@@ -18,6 +18,11 @@ def initialize_model(max_seq_length, load_in_4bit=True):
         dtype=dtype,
         load_in_4bit=load_in_4bit,
     )
+
+    # Ajouter un token de padding si nécessaire
+    if tokenizer.pad_token is None:
+        tokenizer.add_special_tokens({'pad_token': '[PAD]'})
+        model.resize_token_embeddings(len(tokenizer))
 
     model = FastLanguageModel.get_peft_model(
         model,
@@ -58,11 +63,11 @@ def initialize_dataset(tokenizer, csv_file):
     for _, row in df.iterrows():
         formatted_data.append({
             'text': prompt_template.format(
-                texte=row['Texte principal'], 
+                texte=row['Texte principal'],
                 question=row['Questions']
             ) + row['Réponses'] + EOS_TOKEN
         })
-    
+
     # Convertir en dataset Hugging Face
     dataset = Dataset.from_dict({'text': [d['text'] for d in formatted_data]})
 
@@ -76,15 +81,14 @@ def initialize_trainer(model, tokenizer, dataset, max_seq_length):
         dataset_text_field="text",
         max_seq_length=max_seq_length,
         dataset_num_proc=2,
-        packing=False,  # Peut rendre l'entraînement 5x plus rapide pour les séquences courtes.
+        packing=False,
         args=TrainingArguments(
             per_device_train_batch_size=2,
             gradient_accumulation_steps=4,
             warmup_steps=5,
-            max_steps=100,
+            max_steps=1000,  # Augmenter le nombre d'étapes d'entraînement
             learning_rate=2e-4,
-            fp16=not is_bfloat16_supported(),
-            bf16=is_bfloat16_supported(),
+            fp16=True,
             logging_steps=10,
             optim="adamw_8bit",
             weight_decay=0.01,
@@ -92,8 +96,8 @@ def initialize_trainer(model, tokenizer, dataset, max_seq_length):
             seed=3407,
             output_dir="outputs",
             save_strategy="steps",
-            save_steps=100,  # Sauvegarder à la fin de l'entraînement
-            save_total_limit=1,  # Garder uniquement le dernier point de contrôle
+            save_steps=100,  # Sauvegarder périodiquement
+            save_total_limit=2,  # Garder les deux derniers points de contrôle
         ),
     )
 
@@ -102,7 +106,7 @@ def initialize_trainer(model, tokenizer, dataset, max_seq_length):
 if __name__ == "__main__":
     start_time = time.time()
     max_seq_length = 2048
-    load_in_4bit = True  # Définir sur False si des problèmes liés à `bitsandbytes` apparaissent
+    load_in_4bit = False  # Désactiver la quantification en 4 bits
 
     model, tokenizer = initialize_model(max_seq_length, load_in_4bit)
 
@@ -154,8 +158,9 @@ if __name__ == "__main__":
     FastLanguageModel.for_inference(merged_model)
 
     # Test simple
-    inputs = merged_tokenizer("Ceci est un test.", return_tensors="pt").input_ids.to('cuda')
-    outputs = merged_model.generate(inputs, max_new_tokens=50)
+    inputs = merged_tokenizer("Ceci est un test.", return_tensors="pt")
+    inputs = {k: v.to('cuda') for k, v in inputs.items()}
+    outputs = merged_model.generate(**inputs, max_new_tokens=50)
     print("Exemple de génération :", merged_tokenizer.decode(outputs[0]))
 
     end_time = time.time()
