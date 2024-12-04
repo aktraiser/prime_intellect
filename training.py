@@ -22,7 +22,6 @@ def initialize_model(max_seq_length):
         model_id,
         load_in_4bit=True,
         trust_remote_code=True,
-        attn_implementation="flash_attention_2",
         rope_scaling={"type": "dynamic", "factor": 2.0}
     )
     
@@ -46,6 +45,20 @@ def initialize_model(max_seq_length):
     
     # Apply LoRA
     model = get_peft_model(model, lora_config)
+
+    # Add missing return values
+    training_args = TrainingArguments(
+        output_dir="./results",
+        num_train_epochs=3,
+        per_device_train_batch_size=4,
+        gradient_accumulation_steps=4,
+        learning_rate=2e-4,
+        fp16=True,
+        logging_steps=10,
+        save_strategy="epoch"
+    )
+    
+    return model, tokenizer, training_args, None  # lr_scheduler is None for now
 
 def initialize_dataset(tokenizer, csv_file):
     # Charger le fichier CSV
