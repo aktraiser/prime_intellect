@@ -1,87 +1,51 @@
 ## Imports
 import pandas as pd
 from datasets import Dataset
-from unsloth import FastLanguageModel
+from transformers import AutoModelForCausalLM, AutoTokenizer
+from peft import LoraConfig, get_peft_model
 import torch
 from trl import SFTTrainer
-from transformers import TrainingArguments, get_scheduler
-from unsloth import is_bfloat16_supported
+from transformers import TrainingArguments
 import time
 torch.cuda.empty_cache()
 
 def initialize_model(max_seq_length):
- dtype = None  # None for auto detection. Float16 for Tesla T4, V100, Bfloat16 for Ampere+
- load_in_4bit = True  # Use 4bit quantization to reduce memory usage
-
- # Charger le modèle de base avec la configuration mise à jour
- model, tokenizer = FastLanguageModel.from_pretrained(
-     model_name="unsloth/Meta-Llama-3.1-8B",
-     max_seq_length=max_seq_length,
-     dtype=dtype,
-     load_in_4bit=load_in_4bit,
-     attn_implementation="flash_attention_2",
-     rope_scaling={"type": "dynamic", "factor": 2.0},
-     trust_remote_code=True
- )
-
- # Configuration LoRA optimisée pour Unsloth
- model = FastLanguageModel.get_peft_model(
-     model,
-     r=16,  # Rang de la matrice LoRA
-     target_modules=[
-         "q_proj",
-         "k_proj",
-         "v_proj",
-         "o_proj",
-         "gate_proj",
-         "up_proj",
-         "down_proj"
-     ],
-     lora_alpha=16,    # Facteur de scaling
-     lora_dropout=0, # Unsloth recommande 0.0 pour de meilleures performances
-     bias="none",
-     use_gradient_checkpointing="unsloth",
-     random_state=3407,
-     use_rslora=False,  # Rank-stabilized LoRA
-     loftq_config= None,
- )
-
- # Configuration des arguments d'entraînement
- training_args = TrainingArguments(
-     per_device_train_batch_size=2,
-     gradient_accumulation_steps=4,  # Augmenté pour compenser batch_size=1
-     warmup_steps=10,
-     max_steps=1500,
-     learning_rate=2e-4,
-     fp16=not is_bfloat16_supported(),  # Désactivé pour éviter les problèmes numériques
-     bf16=is_bfloat16_supported(),  # Utilisé si disponible
-     logging_steps=1,
-     optim="adamw_8bit",
-     weight_decay=0.01,
-     lr_scheduler_type="linear",  # Changé pour une meilleure convergence
-     seed=3407,
-     output_dir="outputs",
-     gradient_checkpointing=True,
-     torch_compile=False,  # Désactivé pour éviter les problèmes de compilation
-     max_grad_norm=1.0,  # This handles gradient clipping
- )
-
- # Create optimizer before scheduler
- optimizer = torch.optim.AdamW(
-     model.parameters(),
-     lr=training_args.learning_rate,
-     weight_decay=training_args.weight_decay
- )
-
- # Now we can use the optimizer in get_scheduler
- lr_scheduler = get_scheduler(
-     name="reduce_lr_on_plateau",
-     optimizer=optimizer,
-     num_warmup_steps=0,
-     num_training_steps=training_args.max_steps,  # Use max_steps from training_args
- )
-
- return model, tokenizer, training_args, lr_scheduler
+    # Initialize tokenizer and model
+    model_id = "unsloth/Meta-Llama-3.1-8B-bnb-4bit"
+    
+    tokenizer = AutoTokenizer.from_pretrained(
+        model_id,
+        trust_remote_code=True
+    )
+    
+    model = AutoModelForCausalLM.from_pretrained(
+        model_id,
+        load_in_4bit=True,
+        trust_remote_code=True,
+        attn_implementation="flash_attention_2",
+        rope_scaling={"type": "dynamic", "factor": 2.0}
+    )
+    
+    # LoRA configuration
+    lora_config = LoraConfig(
+        r=16,
+        target_modules=[
+            "q_proj",
+            "k_proj",
+            "v_proj",
+            "o_proj",
+            "gate_proj",
+            "up_proj",
+            "down_proj"
+        ],
+        lora_alpha=16,
+        lora_dropout=0,
+        bias="none",
+        task_type="CAUSAL_LM"
+    )
+    
+    # Apply LoRA
+    model = get_peft_model(model, lora_config)
 
 def initialize_dataset(tokenizer, csv_file):
     # Charger le fichier CSV
