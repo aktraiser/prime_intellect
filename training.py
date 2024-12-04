@@ -68,19 +68,34 @@ def initialize_dataset(tokenizer, csv_file, max_seq_length):
  # Remplacer les valeurs manquantes éventuelles par une chaîne vide (au cas où)
  df.fillna({'Titre': '', 'Texte principal': '', 'Questions': '', 'Réponses': ''}, inplace=True)
 
- # Définir le format du prompt corrigé
- prompt_template = """Tu es un expert comptable. Répondez à la question suivante en vous basant sur le texte fourni.
+ # Définir le format du prompt
+ prompt_template = """Tu es un expert comptable spécialisé dans le conseil aux entreprises. En te basant uniquement sur le contexte fourni, réponds à la question de manière précise et professionnelle.
 
-### Titre:
+### Contexte:
 {title}
 
-### Texte principal:
+### Document de référence:
 {texte}
 
-### Question:
+### Question du client:
 {question}
 
-### Réponse:
+### Instructions:
+- Base ta réponse uniquement sur les informations fournies dans le document
+- Prend en compte le title de la reponse pour avoir le contexte
+- Si plusieurs contexte sont identique structure une réponse prennant en compte l'ensemble de leurs données de response
+- Fournis une réponse claire et structurée
+- Utilise un langage professionnel adapté au contexte comptable
+- Si une information n'est pas disponible dans le contexte, indique-le clairement
+- Commence ta réponse par un bref résumé de la situation
+- Structure ta réponse avec des points clés si nécessaire
+- Cite les toujours les références spécifiques du document
+- Termine par une conclusion ou recommandation si approprié
+- En cas de concepts techniques, fournis une brève explication
+- Explique les termes techniques
+- Si plusieurs options sont possibles, présente-les de manière structurée
+
+### Réponse de l'expert:
 """
 
  EOS_TOKEN = tokenizer.eos_token or '<|endoftext|>'
