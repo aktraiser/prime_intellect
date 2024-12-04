@@ -78,7 +78,7 @@ def initialize_model(max_seq_length):
 
  # Now we can use the optimizer in get_scheduler
  lr_scheduler = get_scheduler(
-     name="reduce_on_plateau",
+     name="reduce_lr_on_plateau",
      optimizer=optimizer,
      num_warmup_steps=0,
      num_training_steps=training_args.max_steps,  # Use max_steps from training_args
