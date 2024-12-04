@@ -138,7 +138,7 @@ def initialize_dataset(tokenizer, csv_file):
 
     return dataset
 
-def initialize_trainer(model, tokenizer, dataset, max_seq_length, training_args, lr_scheduler):
+def initialize_trainer(model, tokenizer, dataset, max_seq_length, training_args):
     trainer = SFTTrainer(
         model=model,
         tokenizer=tokenizer,
@@ -148,7 +148,6 @@ def initialize_trainer(model, tokenizer, dataset, max_seq_length, training_args,
         dataset_num_proc=2,
         packing=False,
         args=training_args,
-        lr_scheduler=lr_scheduler,
     )
     return trainer
 
@@ -173,7 +172,7 @@ if __name__ == "__main__":
     # Charger les données à partir du fichier CSV
     dataset = initialize_dataset(tokenizer, 'dataset2_comptable.csv')
 
-    trainer = initialize_trainer(model, tokenizer, dataset, max_seq_length, training_args, lr_scheduler)
+    trainer = initialize_trainer(model, tokenizer, dataset, max_seq_length, training_args)
 
     # Afficher les statistiques de mémoire GPU
     gpu_stats = torch.cuda.get_device_properties(0)
