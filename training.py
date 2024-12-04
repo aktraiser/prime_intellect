@@ -153,7 +153,7 @@ if __name__ == "__main__":
     model, tokenizer = initialize_model(max_seq_length)
 
     # Charger les données à partir du fichier CSV
-    dataset = initialize_dataset(tokenizer, 'dataset_conseils_entreprises.csv')
+    dataset = initialize_dataset(tokenizer, 'dataset2_comptable.csv')
 
     trainer = initialize_trainer(model, tokenizer, dataset, max_seq_length)
 
