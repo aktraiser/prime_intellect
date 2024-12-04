@@ -37,31 +37,28 @@ def initialize_model(max_seq_length):
          "up_proj",
          "down_proj"
      ],
-     lora_alpha=32,    # Facteur de scaling
-     lora_dropout=0.0, # Unsloth recommande 0.0 pour de meilleures performances
+     lora_alpha=16,    # Facteur de scaling
+     lora_dropout=0, # Unsloth recommande 0.0 pour de meilleures performances
      bias="none",
-     use_gradient_checkpointing=True,
+     use_gradient_checkpointing="unsloth",
      random_state=3407,
-     use_rslora=True,  # Rank-stabilized LoRA
-     loftq_config={
-         "loftq_bits": 4,
-         "loftq_iter": 1
-     }
+     use_rslora=False,  # Rank-stabilized LoRA
+     loftq_config= None,
  )
 
  # Configuration des arguments d'entraînement
  training_args = TrainingArguments(
-     per_device_train_batch_size=1,
-     gradient_accumulation_steps=16,  # Augmenté pour compenser batch_size=1
+     per_device_train_batch_size=2,
+     gradient_accumulation_steps=4,  # Augmenté pour compenser batch_size=1
      warmup_steps=10,
      max_steps=1500,
-     learning_rate=5e-6,
-     fp16=False,  # Désactivé pour éviter les problèmes numériques
-     bf16=True,  # Utilisé si disponible
+     learning_rate=2e-4,
+     fp16=not is_bfloat16_supported(),  # Désactivé pour éviter les problèmes numériques
+     bf16=is_bfloat16_supported(),  # Utilisé si disponible
      logging_steps=1,
      optim="adamw_8bit",
      weight_decay=0.01,
-     lr_scheduler_type="cosine",  # Changé pour une meilleure convergence
+     lr_scheduler_type="linear",  # Changé pour une meilleure convergence
      seed=3407,
      output_dir="outputs",
      gradient_checkpointing=True,
