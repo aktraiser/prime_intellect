@@ -1,11 +1,12 @@
+## Imports
 import pandas as pd
 from datasets import Dataset
 from unsloth import FastLanguageModel
 import torch
 from trl import SFTTrainer
 from transformers import TrainingArguments
+from unsloth import is_bfloat16_supported
 import time
-
 torch.cuda.empty_cache()
 
 def initialize_model(max_seq_length):
@@ -50,48 +51,12 @@ def initialize_model(max_seq_length):
 
  return model, tokenizer
 
-def initialize_dataset(tokenizer, csv_file, max_seq_length):
-    # Charger le fichier CSV avec le bon séparateur et gestion des quotes
-    try:
-        df = pd.read_csv(
-            csv_file, 
-            sep=',',
-            quoting=pd.io.common.QUOTE_MINIMAL,  # Gestion des champs contenant des séparateurs
-            encoding='utf-8'
-        )
-        
-        # Vérifier les colonnes requises
-        expected_columns = ['main_text', 'questions', 'answers', 'title']
-        missing_columns = [col for col in expected_columns if col not in df.columns]
-        if missing_columns:
-            print("Colonnes présentes dans le CSV:", df.columns.tolist())
-            raise ValueError(f"Colonnes requises manquantes : {missing_columns}")
-            
-        # Ne garder que les colonnes nécessaires
-        df = df[expected_columns]
-        
-        # Nettoyer les données
-        for col in df.columns:
-            if df[col].dtype == 'object':
-                # Supprimer les sauts de ligne et les espaces en trop
-                df[col] = df[col].str.strip().replace(r'\s+', ' ', regex=True)
-        
-        # Renommer les colonnes
-        df.rename(columns={
-            'main_text': 'Texte principal',
-            'questions': 'Questions',
-            'answers': 'Réponses',
-            'title': 'Titre'
-        }, inplace=True)
-        
-        # Supprimer les lignes avec des valeurs manquantes dans les colonnes essentielles
-        df.dropna(subset=['Titre', 'Texte principal', 'Questions', 'Réponses'], inplace=True)
-
-        # Remplacer les valeurs manquantes éventuelles par une chaîne vide (au cas où)
-        df.fillna({'Titre': '', 'Texte principal': '', 'Questions': '', 'Réponses': ''}, inplace=True)
+def initialize_dataset(tokenizer, csv_file):
+    # Charger le fichier CSV
+    df = pd.read_csv(csv_file)
 
         # Définir le format du prompt
-        prompt_template = """Tu es un expert comptable spécialisé dans le conseil aux entreprises. En te basant uniquement sur le contexte fourni, réponds à la question de manière précise et professionnelle.
+    prompt_template = """Tu es un expert comptable spécialisé dans le conseil aux entreprises. En te basant uniquement sur le contexte fourni, réponds à la question de manière précise et professionnelle.
 
 ### Contexte:
 {title}
@@ -120,37 +85,23 @@ def initialize_dataset(tokenizer, csv_file, max_seq_length):
 ### Réponse de l'expert:
 """
 
-        EOS_TOKEN = tokenizer.eos_token or '<|endoftext|>'
+    EOS_TOKEN = tokenizer.eos_token or '<|endoftext|>'
 
-        # Fonction pour créer le texte formaté avec gestion de la longueur
-        def create_formatted_text(row):
-            prompt = prompt_template.format(
+        # Formater les données
+    formatted_data = []
+    for _, row in df.iterrows():
+        formatted_data.append({
+            'text': prompt_template.format(
                 title=row['Titre'],
                 texte=row['Texte principal'],
                 question=row['Questions']
-            )
-            answer = row['Réponses']
-            full_text = prompt + answer + EOS_TOKEN
-
-            # Tokenizer le texte avec troncature
-            tokenized = tokenizer(
-                full_text,
-                truncation=True,
-                max_length=max_seq_length,
-                return_tensors=None,
-            )
-
-            # Décoder le texte tronqué
-            truncated_text = tokenizer.decode(tokenized['input_ids'], skip_special_tokens=False)
-            return truncated_text
-
-        # Appliquer la fonction à chaque ligne du dataframe
-        df['text'] = df.apply(create_formatted_text, axis=1)
+            ) + row['Réponses'] + EOS_TOKEN
+        })
 
         # Créer le dataset Hugging Face
-        dataset = Dataset.from_pandas(df[['text']])
+    dataset = Dataset.from_dict({'text': [d['text'] for d in formatted_data]})
 
-        return dataset
+    return dataset
 
 def initialize_trainer(model, tokenizer, dataset, max_seq_length):
     trainer = SFTTrainer(
