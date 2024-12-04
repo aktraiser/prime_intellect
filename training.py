@@ -49,16 +49,13 @@ def initialize_model(max_seq_length):
      }
  )
 
- # Réduction du taux d'apprentissage initial
- learning_rate = 5e-6  # Réduit de 1e-5 à 5e-6
-
  # Configuration des arguments d'entraînement
  training_args = TrainingArguments(
      per_device_train_batch_size=1,
      gradient_accumulation_steps=16,  # Augmenté pour compenser batch_size=1
      warmup_steps=10,
      max_steps=1500,
-     learning_rate=learning_rate,
+     learning_rate=5e-6,
      fp16=False,  # Désactivé pour éviter les problèmes numériques
      bf16=True,  # Utilisé si disponible
      logging_steps=1,
@@ -72,12 +69,19 @@ def initialize_model(max_seq_length):
      max_grad_norm=1.0,  # This handles gradient clipping
  )
 
- # Ajout d'un scheduler de taux d'apprentissage
+ # Create optimizer before scheduler
+ optimizer = torch.optim.AdamW(
+     model.parameters(),
+     lr=training_args.learning_rate,
+     weight_decay=training_args.weight_decay
+ )
+
+ # Now we can use the optimizer in get_scheduler
  lr_scheduler = get_scheduler(
-     name="reduce_on_plateau",  # Utilisation d'un scheduler de réduction sur plateau
+     name="reduce_on_plateau",
      optimizer=optimizer,
      num_warmup_steps=0,
-     num_training_steps=total_steps,
+     num_training_steps=training_args.max_steps,  # Use max_steps from training_args
  )
 
  return model, tokenizer, training_args, lr_scheduler
