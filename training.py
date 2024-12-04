@@ -165,23 +165,33 @@ def save_model(model, tokenizer, output_dir):
     tokenizer.save_pretrained(output_dir)
 
 def compute_metrics(eval_pred: EvalPrediction):
-    # Use global tokenizer
-    predictions = global_tokenizer.batch_decode(eval_pred.predictions, skip_special_tokens=True)
-    references = global_tokenizer.batch_decode(eval_pred.label_ids, skip_special_tokens=True)
+    # Limiter le nombre d'échantillons pour l'évaluation
+    max_samples = 32  # Réduire ce nombre si nécessaire
+    
+    predictions = eval_pred.predictions[:max_samples]
+    references = eval_pred.label_ids[:max_samples]
+    
+    # Decoder les tokens
+    predictions = global_tokenizer.batch_decode(predictions, skip_special_tokens=True)
+    references = global_tokenizer.batch_decode(references, skip_special_tokens=True)
     
     # Charger les métriques
     rouge = load("rouge")
     bertscore = load("bertscore")
     
     # Calculer ROUGE
-    rouge_scores = rouge.compute(predictions=predictions, references=references)
+    rouge_scores = rouge.compute(
+        predictions=predictions, 
+        references=references,
+        use_aggregator=True
+    )
     
-    # Calculer BERTScore
+    # Calculer BERTScore avec un batch size plus petit
     bertscore_results = bertscore.compute(
         predictions=predictions, 
         references=references, 
         lang="fr",
-        batch_size=8
+        batch_size=4  # Réduire la taille du batch
     )
     
     metrics = {
