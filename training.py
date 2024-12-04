@@ -92,10 +92,10 @@ def initialize_dataset(tokenizer, csv_file):
     for _, row in df.iterrows():
         formatted_data.append({
             'text': prompt_template.format(
-                title=row['Titre'],
-                texte=row['Texte principal'],
-                question=row['Questions']
-            ) + row['Réponses'] + EOS_TOKEN
+                title=row['title'],
+                texte=row['main_text'],
+                question=row['questions']
+            ) + row['answers'] + EOS_TOKEN
         })
 
         # Créer le dataset Hugging Face
