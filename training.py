@@ -69,8 +69,7 @@ def initialize_model(max_seq_length):
      output_dir="outputs",
      gradient_checkpointing=True,
      torch_compile=False,  # Désactivé pour éviter les problèmes de compilation
-     max_grad_norm=1.0,  # Ajouté pour la stabilité
-     gradient_clipping=1.0,  # Ajout du gradient clipping
+     max_grad_norm=1.0,  # This handles gradient clipping
  )
 
  # Ajout d'un scheduler de taux d'apprentissage
