@@ -51,25 +51,38 @@ def initialize_model(max_seq_length):
  return model, tokenizer
 
 def initialize_dataset(tokenizer, csv_file, max_seq_length):
- # Charger le fichier CSV
- df = pd.read_csv(csv_file)
+    # Charger le fichier CSV avec le bon séparateur
+    try:
+        df = pd.read_csv(csv_file, sep=';', on_bad_lines='warn', encoding='utf-8')
+    except UnicodeDecodeError:
+        # Essayer un autre encodage si UTF-8 échoue
+        df = pd.read_csv(csv_file, sep=';', on_bad_lines='warn', encoding='latin-1')
+    
+    # Vérifier si toutes les colonnes requises existent
+    expected_columns = ['main_text', 'questions', 'answers', 'title']
+    missing_columns = [col for col in expected_columns if col not in df.columns]
+    if missing_columns:
+        raise ValueError(f"Colonnes requises manquantes : {missing_columns}")
+    
+    # Ne garder que les colonnes nécessaires
+    df = df[expected_columns]
+    
+    # Renommer les colonnes
+    df.rename(columns={
+        'main_text': 'Texte principal',
+        'questions': 'Questions',
+        'answers': 'Réponses',
+        'title': 'Titre'
+    }, inplace=True)
+    
+    # Supprimer les lignes avec des valeurs manquantes dans les colonnes essentielles
+    df.dropna(subset=['Titre', 'Texte principal', 'Questions', 'Réponses'], inplace=True)
 
- # Renommer les colonnes pour correspondre aux noms utilisés dans le code
- df.rename(columns={
-     'main_text': 'Texte principal',
-     'questions': 'Questions',
-     'answers': 'Réponses',
-     'title': 'Titre'
- }, inplace=True)
+    # Remplacer les valeurs manquantes éventuelles par une chaîne vide (au cas où)
+    df.fillna({'Titre': '', 'Texte principal': '', 'Questions': '', 'Réponses': ''}, inplace=True)
 
- # Supprimer les lignes avec des valeurs manquantes dans les colonnes essentielles
- df.dropna(subset=['Titre', 'Texte principal', 'Questions', 'Réponses'], inplace=True)
-
- # Remplacer les valeurs manquantes éventuelles par une chaîne vide (au cas où)
- df.fillna({'Titre': '', 'Texte principal': '', 'Questions': '', 'Réponses': ''}, inplace=True)
-
- # Définir le format du prompt
- prompt_template = """Tu es un expert comptable spécialisé dans le conseil aux entreprises. En te basant uniquement sur le contexte fourni, réponds à la question de manière précise et professionnelle.
+    # Définir le format du prompt
+    prompt_template = """Tu es un expert comptable spécialisé dans le conseil aux entreprises. En te basant uniquement sur le contexte fourni, réponds à la question de manière précise et professionnelle.
 
 ### Contexte:
 {title}
@@ -98,119 +111,119 @@ def initialize_dataset(tokenizer, csv_file, max_seq_length):
 ### Réponse de l'expert:
 """
 
- EOS_TOKEN = tokenizer.eos_token or '<|endoftext|>'
+    EOS_TOKEN = tokenizer.eos_token or '<|endoftext|>'
 
- # Fonction pour créer le texte formaté avec gestion de la longueur
- def create_formatted_text(row):
-     prompt = prompt_template.format(
-         title=row['Titre'],
-         texte=row['Texte principal'],
-         question=row['Questions']
-     )
-     answer = row['Réponses']
-     full_text = prompt + answer + EOS_TOKEN
+    # Fonction pour créer le texte formaté avec gestion de la longueur
+    def create_formatted_text(row):
+        prompt = prompt_template.format(
+            title=row['Titre'],
+            texte=row['Texte principal'],
+            question=row['Questions']
+        )
+        answer = row['Réponses']
+        full_text = prompt + answer + EOS_TOKEN
 
-     # Tokenizer le texte avec troncature
-     tokenized = tokenizer(
-         full_text,
-         truncation=True,
-         max_length=max_seq_length,
-         return_tensors=None,
-     )
+        # Tokenizer le texte avec troncature
+        tokenized = tokenizer(
+            full_text,
+            truncation=True,
+            max_length=max_seq_length,
+            return_tensors=None,
+        )
 
-     # Décoder le texte tronqué
-     truncated_text = tokenizer.decode(tokenized['input_ids'], skip_special_tokens=False)
-     return truncated_text
+        # Décoder le texte tronqué
+        truncated_text = tokenizer.decode(tokenized['input_ids'], skip_special_tokens=False)
+        return truncated_text
 
- # Appliquer la fonction à chaque ligne du dataframe
- df['text'] = df.apply(create_formatted_text, axis=1)
+    # Appliquer la fonction à chaque ligne du dataframe
+    df['text'] = df.apply(create_formatted_text, axis=1)
 
- # Créer le dataset Hugging Face
- dataset = Dataset.from_pandas(df[['text']])
+    # Créer le dataset Hugging Face
+    dataset = Dataset.from_pandas(df[['text']])
 
- return dataset
+    return dataset
 
 def initialize_trainer(model, tokenizer, dataset, max_seq_length):
- trainer = SFTTrainer(
-     model=model,
-     tokenizer=tokenizer,
-     train_dataset=dataset,
-     dataset_text_field="text",
-     max_seq_length=max_seq_length,
-     dataset_num_proc=2,
-     packing=False,
-     args=TrainingArguments(
-         per_device_train_batch_size=1,
-         gradient_accumulation_steps=16,  # Augmenté pour compenser batch_size=1
-         warmup_steps=10,
-         max_steps=1500,
-         learning_rate=1e-4,  # Réduit pour plus de stabilité
-         fp16=False,  # Désactivé pour éviter les problèmes numériques
-         bf16=True,  # Utilisé si disponible
-         logging_steps=1,
-         optim="adamw_8bit",
-         weight_decay=0.01,
-         lr_scheduler_type="cosine",  # Changé pour une meilleure convergence
-         seed=3407,
-         output_dir="outputs",
-         gradient_checkpointing=True,
-         torch_compile=False,  # Désactivé pour éviter les problèmes de compilation
-         max_grad_norm=1.0,  # Ajouté pour la stabilité
-     ),
- )
- return trainer
+    trainer = SFTTrainer(
+        model=model,
+        tokenizer=tokenizer,
+        train_dataset=dataset,
+        dataset_text_field="text",
+        max_seq_length=max_seq_length,
+        dataset_num_proc=2,
+        packing=False,
+        args=TrainingArguments(
+            per_device_train_batch_size=1,
+            gradient_accumulation_steps=16,  # Augmenté pour compenser batch_size=1
+            warmup_steps=10,
+            max_steps=100,
+            learning_rate=1e-4,  # Réduit pour plus de stabilité
+            fp16=False,  # Désactivé pour éviter les problèmes numériques
+            bf16=True,  # Utilisé si disponible
+            logging_steps=1,
+            optim="adamw_8bit",
+            weight_decay=0.01,
+            lr_scheduler_type="cosine",  # Changé pour une meilleure convergence
+            seed=3407,
+            output_dir="outputs",
+            gradient_checkpointing=True,
+            torch_compile=False,  # Désactivé pour éviter les problèmes de compilation
+            max_grad_norm=1.0,  # Ajouté pour la stabilité
+        ),
+    )
+    return trainer
 
 def save_model(model, tokenizer, output_dir):
- # Supprimer les attributs spécifiques à l'entraînement
- if hasattr(model, 'module'):
-     model = model.module
+    # Supprimer les attributs spécifiques à l'entraînement
+    if hasattr(model, 'module'):
+        model = model.module
 
- # Sauvegarder avec la configuration complète
- model.save_pretrained(
-     output_dir,
-     safe_serialization=True,
-     max_shard_size="10GB"
- )
- tokenizer.save_pretrained(output_dir)
+    # Sauvegarder avec la configuration complète
+    model.save_pretrained(
+        output_dir,
+        safe_serialization=True,
+        max_shard_size="10GB"
+    )
+    tokenizer.save_pretrained(output_dir)
 
 if __name__ == "__main__":
- start_time = time.time()
- max_seq_length = 2048
- model, tokenizer = initialize_model(max_seq_length)
+    start_time = time.time()
+    max_seq_length = 2048
+    model, tokenizer = initialize_model(max_seq_length)
 
- # Charger les données à partir du fichier CSV
- dataset = initialize_dataset(tokenizer, 'dataset_comptable.csv', max_seq_length)
+    # Charger les données à partir du fichier CSV
+    dataset = initialize_dataset(tokenizer, 'dataset_conseils_entreprises.csv', max_seq_length)
 
- trainer = initialize_trainer(model, tokenizer, dataset, max_seq_length)
+    trainer = initialize_trainer(model, tokenizer, dataset, max_seq_length)
 
- # Afficher les statistiques de mémoire GPU
- gpu_stats = torch.cuda.get_device_properties(0)
- start_gpu_memory = round(torch.cuda.max_memory_reserved() / 1024 / 1024 / 1024, 3)
- max_memory = round(gpu_stats.total_memory / 1024 / 1024 / 1024, 3)
- print(f"GPU = {gpu_stats.name}. Max memory = {max_memory} GB.")
- print(f"{start_gpu_memory} GB of memory reserved.")
+    # Afficher les statistiques de mémoire GPU
+    gpu_stats = torch.cuda.get_device_properties(0)
+    start_gpu_memory = round(torch.cuda.max_memory_reserved() / 1024 / 1024 / 1024, 3)
+    max_memory = round(gpu_stats.total_memory / 1024 / 1024 / 1024, 3)
+    print(f"GPU = {gpu_stats.name}. Max memory = {max_memory} GB.")
+    print(f"{start_gpu_memory} GB of memory reserved.")
 
- # Entraîner le modèle
- trainer.train()
+    # Entraîner le modèle
+    trainer.train()
 
- end_time = time.time()
- # Afficher les statistiques finales de mémoire et de temps
- used_memory = round(torch.cuda.max_memory_reserved() / 1024 / 1024 / 1024, 3)
- used_memory_for_lora = round(used_memory - start_gpu_memory, 3)
- used_percentage = round(used_memory / max_memory * 100, 3)
- lora_percentage = round(used_memory_for_lora / max_memory * 100, 3)
- print(f"{end_time - start_time} seconds used for training.")
- print(f"{round((end_time - start_time)/60, 2)} minutes used for training.")
- print(f"Peak reserved memory = {used_memory} GB.")
- print(f"Peak reserved memory for training = {used_memory_for_lora} GB.")
- print(f"Peak reserved memory % of max memory = {used_percentage} %.")
- print(f"Peak reserved memory for training % of max memory = {lora_percentage} %.")
+    end_time = time.time()
+    # Afficher les statistiques finales de mémoire et de temps
+    used_memory = round(torch.cuda.max_memory_reserved() / 1024 / 1024 / 1024, 3)
+    used_memory_for_lora = round(used_memory - start_gpu_memory, 3)
+    used_percentage = round(used_memory / max_memory * 100, 3)
+    lora_percentage = round(used_memory_for_lora / max_memory * 100, 3)
+    print(f"{end_time - start_time} seconds used for training.")
+    print(f"{round((end_time - start_time)/60, 2)} minutes used for training.")
+    print(f"Peak reserved memory = {used_memory} GB.")
+    print(f"Peak reserved memory for training = {used_memory_for_lora} GB.")
+    print(f"Peak reserved memory % of max memory = {used_percentage} %.")
+    print(f"Peak reserved memory for training % of max memory = {lora_percentage} %.")
 
- # Sauvegarder l'adaptateur LoRA
- save_model(model, tokenizer, 'peft_model')
+    # Sauvegarder l'adaptateur LoRA
+    save_model(model, tokenizer, 'peft_model')
 
- # Fusionner les poids LoRA avec le modèle de base et sauvegarder
- merged_model = model.merge_and_unload()
- save_model(merged_model, tokenizer, 'llama_model_merged')
+    # Fusionner les poids LoRA avec le modèle de base et sauvegarder
+    merged_model = model.merge_and_unload()
+    save_model(merged_model, tokenizer, 'llama_model_merged')
 
- print("Modèle fusionné et sauvegardé avec succès.")
+    print("Modèle fusionné et sauvegardé avec succès.")
