@@ -143,7 +143,7 @@ def initialize_trainer(model, tokenizer, dataset, max_seq_length):
          per_device_train_batch_size=1,
          gradient_accumulation_steps=16,  # Augmenté pour compenser batch_size=1
          warmup_steps=10,
-         max_steps=100,
+         max_steps=1500,
          learning_rate=1e-4,  # Réduit pour plus de stabilité
          fp16=False,  # Désactivé pour éviter les problèmes numériques
          bf16=True,  # Utilisé si disponible
@@ -179,7 +179,7 @@ if __name__ == "__main__":
  model, tokenizer = initialize_model(max_seq_length)
 
  # Charger les données à partir du fichier CSV
- dataset = initialize_dataset(tokenizer, 'dataset_conseils_entreprises.csv', max_seq_length)
+ dataset = initialize_dataset(tokenizer, 'dataset_comptable.csv', max_seq_length)
 
  trainer = initialize_trainer(model, tokenizer, dataset, max_seq_length)
 
