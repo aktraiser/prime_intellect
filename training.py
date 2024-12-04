@@ -7,9 +7,7 @@ from trl import SFTTrainer
 from transformers import TrainingArguments
 from unsloth import is_bfloat16_supported
 import time
-from datasets import load_metric
 from evaluate import load
-from transformers import EvalPrediction
 import numpy as np
 torch.cuda.empty_cache()
 
