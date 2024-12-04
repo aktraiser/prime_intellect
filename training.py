@@ -1,90 +1,61 @@
-## Imports
+# Imports
 import pandas as pd
 from datasets import Dataset
 from unsloth import FastLanguageModel
 import torch
 from trl import SFTTrainer
-from transformers import TrainingArguments, get_scheduler, AutoTokenizer
-from unsloth import is_bfloat16_supported
+from transformers import TrainingArguments
 import time
+
 torch.cuda.empty_cache()
 
 def initialize_model(max_seq_length):
- dtype = None  # None for auto detection. Float16 for Tesla T4, V100, Bfloat16 for Ampere+
- load_in_4bit = True  # Use 4bit quantization to reduce memory usage
+    dtype = None  # None pour détection automatique
+    load_in_4bit = True  # Utiliser la quantification 4 bits pour réduire l'utilisation de la mémoire
 
- # Charger le modèle de base avec la configuration mise à jour
- model, tokenizer = FastLanguageModel.from_pretrained(
-     model_name="unsloth/Meta-Llama-3.1-8B-bnb-4bit",
-     max_seq_length=max_seq_length,
-     load_in_4bit=True,
-     load_in_8bit=False,
-     dtype=None,
- )
+    # Charger le modèle de base avec la configuration mise à jour
+    model, tokenizer = FastLanguageModel.from_pretrained(
+        model_name="unsloth/Meta-Llama-3.1-8B",
+        max_seq_length=max_seq_length,
+        dtype=dtype,
+        load_in_4bit=load_in_4bit,
+        attn_implementation="flash_attention_2",
+        rope_scaling={"type": "dynamic", "factor": 2.0},
+        trust_remote_code=True
+    )
 
- # Configuration LoRA optimisée pour Unsloth
- model = FastLanguageModel.get_peft_model(
-     model,
-     r=16,  # Rang de la matrice LoRA
-     target_modules=[
-         "q_proj",
-         "k_proj",
-         "v_proj",
-         "o_proj",
-         "gate_proj",
-         "up_proj",
-         "down_proj"
-     ],
-     lora_alpha=16,    # Facteur de scaling
-     lora_dropout=0, # Unsloth recommande 0.0 pour de meilleures performances
-     bias="none",
-     use_gradient_checkpointing=True,
-     random_state=42,
-     use_rslora=False,  # Rank-stabilized LoRA
- )
+    # Configuration LoRA optimisée pour Unsloth
+    model = FastLanguageModel.get_peft_model(
+        model,
+        r=16,  # Rang de la matrice LoRA
+        target_modules=[
+            "q_proj",
+            "k_proj",
+            "v_proj",
+            "o_proj",
+            "gate_proj",
+            "up_proj",
+            "down_proj"
+        ],
+        lora_alpha=32,    # Facteur de scaling
+        lora_dropout=0.05,  # Un léger dropout pour éviter le surapprentissage
+        bias="none",
+        use_gradient_checkpointing=True,
+        random_state=3407,
+        use_rslora=True,  # Rank-stabilized LoRA
+        loftq_config={
+            "loftq_bits": 4,
+            "loftq_iter": 1
+        }
+    )
 
- # Configuration des arguments d'entraînement
- training_args = TrainingArguments(
-     per_device_train_batch_size=2,
-     gradient_accumulation_steps=4,  # Augmenté pour compenser batch_size=1
-     warmup_steps=10,
-     max_steps=1500,
-     learning_rate=2e-4,
-     fp16=not is_bfloat16_supported(),  # Désactivé pour éviter les problèmes numériques
-     bf16=is_bfloat16_supported(),  # Utilisé si disponible
-     logging_steps=1,
-     optim="adamw_8bit",
-     weight_decay=0.01,
-     lr_scheduler_type="cosine",  # Changé pour une meilleure convergence
-     seed=3407,
-     output_dir="outputs",
-     gradient_checkpointing=True,
-     torch_compile=False,  # Désactivé pour éviter les problèmes de compilation
-     max_grad_norm=1.0,  # This handles gradient clipping
- )
-
- # Create optimizer before scheduler
- optimizer = torch.optim.AdamW(
-     model.parameters(),
-     lr=training_args.learning_rate,
-     weight_decay=training_args.weight_decay
- )
-
- # Now we can use the optimizer in get_scheduler
- lr_scheduler = get_scheduler(
-     name="reduce_lr_on_plateau",
-     optimizer=optimizer,
-     num_warmup_steps=0,
-     num_training_steps=training_args.max_steps,  # Use max_steps from training_args
- )
-
- return model, tokenizer, training_args, lr_scheduler
+    return model, tokenizer
 
 def initialize_dataset(tokenizer, csv_file):
     # Charger le fichier CSV
     df = pd.read_csv(csv_file)
 
-        # Définir le format du prompt
+    # Définir le format du prompt
     prompt_template = """Tu es un expert comptable spécialisé dans le conseil aux entreprises. En te basant uniquement sur le contexte fourni, réponds à la question de manière précise et professionnelle.
 
 ### Contexte:
@@ -98,14 +69,14 @@ def initialize_dataset(tokenizer, csv_file):
 
 ### Instructions:
 - Base ta réponse uniquement sur les informations fournies dans le document
-- Prend en compte le title de la reponse pour avoir le contexte
-- Si plusieurs contexte sont identique structure une réponse prennant en compte l'ensemble de leurs données de response
+- Prends en compte le titre de la réponse pour avoir le contexte
+- Si plusieurs contextes sont identiques, structure une réponse prenant en compte l'ensemble de leurs données de réponse
 - Fournis une réponse claire et structurée
 - Utilise un langage professionnel adapté au contexte comptable
 - Si une information n'est pas disponible dans le contexte, indique-le clairement
 - Commence ta réponse par un bref résumé de la situation
 - Structure ta réponse avec des points clés si nécessaire
-- Cite les toujours les références spécifiques du document
+- Cite toujours les références spécifiques du document
 - Termine par une conclusion ou recommandation si approprié
 - En cas de concepts techniques, fournis une brève explication
 - Explique les termes techniques
@@ -116,30 +87,48 @@ def initialize_dataset(tokenizer, csv_file):
 
     EOS_TOKEN = tokenizer.eos_token or '<|endoftext|>'
 
-        # Formater les données
+    # Formater les données
     formatted_data = []
     for _, row in df.iterrows():
-        formatted_data.append({
-            'text': prompt_template.format(
-                title=row['title'],
-                texte=row['main_text'],
-                question=row['questions']
-            ) + row['answers'] + EOS_TOKEN
-        })
+        formatted_text = prompt_template.format(
+            title=row['title'],
+            texte=row['main_text'],
+            question=row['questions']
+        ) + row['answers'] + EOS_TOKEN
+        formatted_data.append({'text': formatted_text})
 
-        # Créer le dataset Hugging Face
+    # Créer le dataset Hugging Face
     dataset = Dataset.from_dict({'text': [d['text'] for d in formatted_data]})
 
     return dataset
 
-def initialize_trainer(model, tokenizer, dataset, max_seq_length, training_args):
+def initialize_trainer(model, tokenizer, dataset, max_seq_length):
+    training_args = TrainingArguments(
+        per_device_train_batch_size=1,
+        gradient_accumulation_steps=16,  # Augmenté pour compenser le batch_size=1
+        warmup_steps=100,
+        max_steps=2000,
+        learning_rate=2e-5,  # Taux d'apprentissage adapté
+        fp16=False,
+        bf16=torch.cuda.is_bf16_supported(),
+        logging_steps=10,
+        optim="adamw_torch",
+        weight_decay=0.01,
+        lr_scheduler_type="cosine",
+        seed=3407,
+        output_dir="outputs",
+        gradient_checkpointing=True,
+        torch_compile=False,
+        max_grad_norm=1.0,
+    )
+
     trainer = SFTTrainer(
         model=model,
         tokenizer=tokenizer,
         train_dataset=dataset,
         dataset_text_field="text",
         max_seq_length=max_seq_length,
-        dataset_num_proc=2,
+        dataset_num_proc=4,
         packing=False,
         args=training_args,
     )
@@ -161,12 +150,12 @@ def save_model(model, tokenizer, output_dir):
 if __name__ == "__main__":
     start_time = time.time()
     max_seq_length = 2048
-    model, tokenizer, training_args, lr_scheduler = initialize_model(max_seq_length)
+    model, tokenizer = initialize_model(max_seq_length)
 
     # Charger les données à partir du fichier CSV
-    dataset = initialize_dataset(tokenizer, 'dataset2_comptable.csv')
+    dataset = initialize_dataset(tokenizer, 'dataset_conseils_entreprises.csv')
 
-    trainer = initialize_trainer(model, tokenizer, dataset, max_seq_length, training_args)
+    trainer = initialize_trainer(model, tokenizer, dataset, max_seq_length)
 
     # Afficher les statistiques de mémoire GPU
     gpu_stats = torch.cuda.get_device_properties(0)
