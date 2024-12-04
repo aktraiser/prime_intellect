@@ -1,10 +1,10 @@
 ## Imports
 import pandas as pd
 from datasets import Dataset
-from unsloth import FastLanguageModel, PatchDPOTrainer, PatchTrainer
+from unsloth import FastLanguageModel
 import torch
 from trl import SFTTrainer
-from transformers import TrainingArguments, get_scheduler
+from transformers import TrainingArguments, get_scheduler, AutoTokenizer
 from unsloth import is_bfloat16_supported
 import time
 torch.cuda.empty_cache()
@@ -15,12 +15,11 @@ def initialize_model(max_seq_length):
 
  # Charger le modèle de base avec la configuration mise à jour
  model, tokenizer = FastLanguageModel.from_pretrained(
-     model_name="unsloth/Meta-Llama-3.1-8B",
+     model_name="unsloth/Meta-Llama-3.1-8B-bnb-4bit",
      max_seq_length=max_seq_length,
+     load_in_4bit=True,
+     load_in_8bit=False,
      dtype=None,
-     load_in_4bit=load_in_4bit,
-     attn_implementation="flash_attention_2",
-     rope_scaling={"type": "dynamic", "factor": 2.0},
  )
 
  # Configuration LoRA optimisée pour Unsloth
@@ -40,7 +39,7 @@ def initialize_model(max_seq_length):
      lora_dropout=0, # Unsloth recommande 0.0 pour de meilleures performances
      bias="none",
      use_gradient_checkpointing=True,
-     random_state=3407,
+     random_state=42,
      use_rslora=False,  # Rank-stabilized LoRA
  )
 
