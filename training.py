@@ -7,6 +7,10 @@ from trl import SFTTrainer
 from transformers import TrainingArguments
 from unsloth import is_bfloat16_supported
 import time
+from datasets import load_metric
+from evaluate import load
+from transformers import EvalPrediction
+import numpy as np
 torch.cuda.empty_cache()
 
 def initialize_model(max_seq_length):
@@ -104,14 +108,19 @@ def initialize_dataset(tokenizer, csv_file):
     return dataset
 
 def initialize_trainer(model, tokenizer, dataset, max_seq_length):
+    # Séparer le dataset en train et validation
+    dataset_dict = dataset.train_test_split(test_size=0.1, seed=3407)
+    
     trainer = SFTTrainer(
         model=model,
         tokenizer=tokenizer,
-        train_dataset=dataset,
+        train_dataset=dataset_dict["train"],
+        eval_dataset=dataset_dict["test"],  # Ajout du dataset de validation
         dataset_text_field="text",
         max_seq_length=max_seq_length,
         dataset_num_proc=2,
         packing=False,
+        compute_metrics=compute_metrics,  # Ajout des métriques
         args=TrainingArguments(
             per_device_train_batch_size=1,
             gradient_accumulation_steps=16,  # Augmenté pour compenser batch_size=1
@@ -129,6 +138,12 @@ def initialize_trainer(model, tokenizer, dataset, max_seq_length):
             gradient_checkpointing=True,
             torch_compile=False,  # Désactivé pour éviter les problèmes de compilation
             max_grad_norm=1.0,  # Ajouté pour la stabilité
+            evaluation_strategy="steps",    # Évaluer périodiquement
+            eval_steps=100,                # Évaluer tous les 100 steps
+            save_strategy="steps",         # Sauvegarder périodiquement
+            save_steps=100,                # Sauvegarder tous les 100 steps
+            load_best_model_at_end=True,   # Charger le meilleur modèle à la fin
+            metric_for_best_model="bertscore_f1",  # Métrique pour sélectionner le meilleur modèle
         ),
     )
     return trainer
@@ -145,6 +160,36 @@ def save_model(model, tokenizer, output_dir):
         max_shard_size="10GB"
     )
     tokenizer.save_pretrained(output_dir)
+
+def compute_metrics(eval_pred: EvalPrediction):
+    # Charger les métriques
+    rouge = load("rouge")
+    bertscore = load("bertscore")
+    
+    # Décoder les prédictions et références
+    tokenizer = trainer.tokenizer
+    predictions = tokenizer.batch_decode(eval_pred.predictions, skip_special_tokens=True)
+    references = tokenizer.batch_decode(eval_pred.label_ids, skip_special_tokens=True)
+    
+    # Calculer ROUGE
+    rouge_scores = rouge.compute(predictions=predictions, references=references)
+    
+    # Calculer BERTScore
+    bertscore_results = bertscore.compute(
+        predictions=predictions, 
+        references=references, 
+        lang="fr",
+        batch_size=8
+    )
+    
+    metrics = {
+        "rouge1": rouge_scores["rouge1"],
+        "rouge2": rouge_scores["rouge2"],
+        "rougeL": rouge_scores["rougeL"],
+        "bertscore_f1": np.mean(bertscore_results["f1"])
+    }
+    
+    return metrics
 
 if __name__ == "__main__":
     start_time = time.time()
