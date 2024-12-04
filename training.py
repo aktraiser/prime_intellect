@@ -48,10 +48,10 @@ def initialize_model(max_seq_length):
     # Configuration des arguments d'entraînement
     training_args = TrainingArguments(
         per_device_train_batch_size=2,
-        gradient_accumulation_steps=4,
-        warmup_steps=10,
+        gradient_accumulation_steps=8,  # Augmenté de 4 à 8 pour une meilleure stabilité
+        warmup_steps=50,  # Augmenté pour un warmup plus progressif
         max_steps=1500,
-        learning_rate=2e-4,
+        learning_rate=1e-4,  # Réduit pour plus de stabilité
         fp16=not is_bfloat16_supported(),
         bf16=is_bfloat16_supported(),
         logging_steps=1,
@@ -62,8 +62,8 @@ def initialize_model(max_seq_length):
         output_dir="outputs",
         gradient_checkpointing=True,
         torch_compile=False,
-        max_grad_norm=1.0,
-        report_to="none"  # Désactiver wandb si non utilisé
+        max_grad_norm=2.0,  # Augmenté de 1.0 à 2.0
+        report_to="none"
     )
 
     # Create optimizer before scheduler
