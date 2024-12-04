@@ -142,11 +142,13 @@ def initialize_trainer(model, tokenizer, dataset, max_seq_length):
             torch_compile=False,  # Désactivé pour éviter les problèmes de compilation
             max_grad_norm=1.0,  # Ajouté pour la stabilité
             evaluation_strategy="steps",    # Évaluer périodiquement
-            eval_steps=100,                # Évaluer tous les 100 steps
+            eval_steps=200,                # Évaluer tous les 200 steps
             save_strategy="steps",         # Sauvegarder périodiquement
-            save_steps=100,                # Sauvegarder tous les 100 steps
+            save_steps=200,                # Sauvegarder tous les 200 steps
             load_best_model_at_end=True,   # Charger le meilleur modèle à la fin
             metric_for_best_model="bertscore_f1",  # Métrique pour sélectionner le meilleur modèle
+            max_eval_samples=8,            # Limit evaluation samples
+            eval_accumulation_steps=4,     # Add gradient accumulation for eval
         ),
     )
     return trainer
@@ -165,33 +167,36 @@ def save_model(model, tokenizer, output_dir):
     tokenizer.save_pretrained(output_dir)
 
 def compute_metrics(eval_pred: EvalPrediction):
-    # Limiter le nombre d'échantillons pour l'évaluation
-    max_samples = 32  # Réduire ce nombre si nécessaire
+    # Reduce max samples even further
+    max_samples = 8  # Reduced from 32
     
+    # Process predictions in smaller batches
     predictions = eval_pred.predictions[:max_samples]
     references = eval_pred.label_ids[:max_samples]
     
-    # Decoder les tokens
+    # Free up memory explicitly
+    torch.cuda.empty_cache()
+    
+    # Decoder with smaller batches
     predictions = global_tokenizer.batch_decode(predictions, skip_special_tokens=True)
     references = global_tokenizer.batch_decode(references, skip_special_tokens=True)
     
-    # Charger les métriques
+    # Calculate metrics with reduced batch sizes
     rouge = load("rouge")
     bertscore = load("bertscore")
     
-    # Calculer ROUGE
     rouge_scores = rouge.compute(
         predictions=predictions, 
         references=references,
         use_aggregator=True
     )
     
-    # Calculer BERTScore avec un batch size plus petit
+    # Further reduce BERTScore batch size
     bertscore_results = bertscore.compute(
         predictions=predictions, 
         references=references, 
         lang="fr",
-        batch_size=4  # Réduire la taille du batch
+        batch_size=2  # Reduced from 4
     )
     
     metrics = {
@@ -200,6 +205,9 @@ def compute_metrics(eval_pred: EvalPrediction):
         "rougeL": rouge_scores["rougeL"],
         "bertscore_f1": np.mean(bertscore_results["f1"])
     }
+    
+    # Clear cache again after computing metrics
+    torch.cuda.empty_cache()
     
     return metrics
 
