@@ -4,12 +4,15 @@ from datasets import Dataset
 from unsloth import FastLanguageModel
 import torch
 from trl import SFTTrainer
-from transformers import TrainingArguments
+from transformers import TrainingArguments, EvalPrediction
 from unsloth import is_bfloat16_supported
 import time
 from evaluate import load
 import numpy as np
 torch.cuda.empty_cache()
+
+# At global scope
+global_tokenizer = None
 
 def initialize_model(max_seq_length):
  dtype = None  # None for auto detection. Float16 for Tesla T4, V100, Bfloat16 for Ampere+
@@ -106,6 +109,8 @@ def initialize_dataset(tokenizer, csv_file):
     return dataset
 
 def initialize_trainer(model, tokenizer, dataset, max_seq_length):
+    global global_tokenizer
+    global_tokenizer = tokenizer
     # Séparer le dataset en train et validation
     dataset_dict = dataset.train_test_split(test_size=0.1, seed=3407)
     
@@ -160,14 +165,13 @@ def save_model(model, tokenizer, output_dir):
     tokenizer.save_pretrained(output_dir)
 
 def compute_metrics(eval_pred: EvalPrediction):
+    # Use global tokenizer
+    predictions = global_tokenizer.batch_decode(eval_pred.predictions, skip_special_tokens=True)
+    references = global_tokenizer.batch_decode(eval_pred.label_ids, skip_special_tokens=True)
+    
     # Charger les métriques
     rouge = load("rouge")
     bertscore = load("bertscore")
-    
-    # Décoder les prédictions et références
-    tokenizer = trainer.tokenizer
-    predictions = tokenizer.batch_decode(eval_pred.predictions, skip_special_tokens=True)
-    references = tokenizer.batch_decode(eval_pred.label_ids, skip_special_tokens=True)
     
     # Calculer ROUGE
     rouge_scores = rouge.compute(predictions=predictions, references=references)
