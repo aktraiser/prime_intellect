@@ -1,7 +1,7 @@
 ## Imports
 import pandas as pd
 from datasets import Dataset
-from unsloth import FastLanguageModel
+from unsloth import FastLanguageModel, PatchDPOTrainer, PatchTrainer
 import torch
 from trl import SFTTrainer
 from transformers import TrainingArguments, get_scheduler
@@ -17,11 +17,10 @@ def initialize_model(max_seq_length):
  model, tokenizer = FastLanguageModel.from_pretrained(
      model_name="unsloth/Meta-Llama-3.1-8B",
      max_seq_length=max_seq_length,
-     dtype=dtype,
+     dtype=None,
      load_in_4bit=load_in_4bit,
      attn_implementation="flash_attention_2",
      rope_scaling={"type": "dynamic", "factor": 2.0},
-     trust_remote_code=True
  )
 
  # Configuration LoRA optimisée pour Unsloth
@@ -40,13 +39,9 @@ def initialize_model(max_seq_length):
      lora_alpha=16,    # Facteur de scaling
      lora_dropout=0, # Unsloth recommande 0.0 pour de meilleures performances
      bias="none",
-     use_gradient_checkpointing="unsloth",
+     use_gradient_checkpointing=True,
      random_state=3407,
      use_rslora=False,  # Rank-stabilized LoRA
-     loftq_config={
-         "loftq_bits": 4,
-         "loftq_iter": 1
-     }
  )
 
  # Configuration des arguments d'entraînement
@@ -61,7 +56,7 @@ def initialize_model(max_seq_length):
      logging_steps=1,
      optim="adamw_8bit",
      weight_decay=0.01,
-     lr_scheduler_type="linear",  # Changé pour une meilleure convergence
+     lr_scheduler_type="cosine",  # Changé pour une meilleure convergence
      seed=3407,
      output_dir="outputs",
      gradient_checkpointing=True,
