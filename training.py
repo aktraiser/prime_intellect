@@ -4,15 +4,10 @@ from datasets import Dataset
 from unsloth import FastLanguageModel
 import torch
 from trl import SFTTrainer
-from transformers import TrainingArguments, EvalPrediction
+from transformers import TrainingArguments
 from unsloth import is_bfloat16_supported
 import time
-from evaluate import load
-import numpy as np
 torch.cuda.empty_cache()
-
-# At global scope
-global_tokenizer = None
 
 def initialize_model(max_seq_length):
  dtype = None  # None for auto detection. Float16 for Tesla T4, V100, Bfloat16 for Ampere+
@@ -109,21 +104,14 @@ def initialize_dataset(tokenizer, csv_file):
     return dataset
 
 def initialize_trainer(model, tokenizer, dataset, max_seq_length):
-    global global_tokenizer
-    global_tokenizer = tokenizer
-    # Séparer le dataset en train et validation
-    dataset_dict = dataset.train_test_split(test_size=0.1, seed=3407)
-    
     trainer = SFTTrainer(
         model=model,
         tokenizer=tokenizer,
-        train_dataset=dataset_dict["train"],
-        eval_dataset=dataset_dict["test"],  # Ajout du dataset de validation
+        train_dataset=dataset,
         dataset_text_field="text",
         max_seq_length=max_seq_length,
         dataset_num_proc=2,
         packing=False,
-        compute_metrics=compute_metrics,  # Ajout des métriques
         args=TrainingArguments(
             per_device_train_batch_size=1,
             gradient_accumulation_steps=16,  # Augmenté pour compenser batch_size=1
@@ -141,14 +129,6 @@ def initialize_trainer(model, tokenizer, dataset, max_seq_length):
             gradient_checkpointing=True,
             torch_compile=False,  # Désactivé pour éviter les problèmes de compilation
             max_grad_norm=1.0,  # Ajouté pour la stabilité
-            evaluation_strategy="steps",    # Évaluer périodiquement
-            eval_steps=200,                # Évaluer tous les 200 steps
-            save_strategy="steps",         # Sauvegarder périodiquement
-            save_steps=200,                # Sauvegarder tous les 200 steps
-            load_best_model_at_end=True,   # Charger le meilleur modèle à la fin
-            metric_for_best_model="bertscore_f1",  # Métrique pour sélectionner le meilleur modèle
-            max_eval_samples=8,            # Limit evaluation samples
-            eval_accumulation_steps=4,     # Add gradient accumulation for eval
         ),
     )
     return trainer
@@ -165,51 +145,6 @@ def save_model(model, tokenizer, output_dir):
         max_shard_size="10GB"
     )
     tokenizer.save_pretrained(output_dir)
-
-def compute_metrics(eval_pred: EvalPrediction):
-    # Reduce max samples even further
-    max_samples = 8  # Reduced from 32
-    
-    # Process predictions in smaller batches
-    predictions = eval_pred.predictions[:max_samples]
-    references = eval_pred.label_ids[:max_samples]
-    
-    # Free up memory explicitly
-    torch.cuda.empty_cache()
-    
-    # Decoder with smaller batches
-    predictions = global_tokenizer.batch_decode(predictions, skip_special_tokens=True)
-    references = global_tokenizer.batch_decode(references, skip_special_tokens=True)
-    
-    # Calculate metrics with reduced batch sizes
-    rouge = load("rouge")
-    bertscore = load("bertscore")
-    
-    rouge_scores = rouge.compute(
-        predictions=predictions, 
-        references=references,
-        use_aggregator=True
-    )
-    
-    # Further reduce BERTScore batch size
-    bertscore_results = bertscore.compute(
-        predictions=predictions, 
-        references=references, 
-        lang="fr",
-        batch_size=2  # Reduced from 4
-    )
-    
-    metrics = {
-        "rouge1": rouge_scores["rouge1"],
-        "rouge2": rouge_scores["rouge2"],
-        "rougeL": rouge_scores["rougeL"],
-        "bertscore_f1": np.mean(bertscore_results["f1"])
-    }
-    
-    # Clear cache again after computing metrics
-    torch.cuda.empty_cache()
-    
-    return metrics
 
 if __name__ == "__main__":
     start_time = time.time()
