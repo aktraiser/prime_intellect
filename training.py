@@ -10,6 +10,7 @@ import os
 import shutil
 from pathlib import Path
 import logging
+from transformers import TrainerCallback
 torch.cuda.empty_cache()
 
 # Configuration du logger
@@ -184,7 +185,7 @@ def save_checkpoint(model, optimizer, scheduler, loss, step, checkpoint_dir, kee
         for checkpoint in checkpoints[:-keep_last_n]:
             shutil.rmtree(os.path.join(checkpoint_dir, checkpoint))
 
-class LoggingCallback:
+class LoggingCallback(TrainerCallback):
     def __init__(self):
         self.best_loss = float('inf')
         self.start_time = time.time()
@@ -192,17 +193,9 @@ class LoggingCallback:
             self.max_memory = torch.cuda.get_device_properties(0).total_memory / (1024**3)
             self.initial_memory = torch.cuda.memory_reserved() / (1024**3)
 
-    def on_epoch_begin(self, args, state, control, **kwargs):
-        """Called at the beginning of every epoch"""
+    def on_init_end(self, args, state, control, **kwargs):
+        """Called at the end of trainer initialization"""
         pass
-
-    def on_step_end(self, args, state, control, **kwargs):
-        """Called at the end of every step"""
-        if state.log_history:
-            current_loss = state.log_history[-1].get('loss', None)
-            if current_loss is not None and current_loss < self.best_loss:
-                self.best_loss = current_loss
-                print(f"\nNew best loss: {self.best_loss:.4f}")
 
     def on_train_begin(self, args, state, control, **kwargs):
         """Called at the beginning of training"""
@@ -222,11 +215,44 @@ class LoggingCallback:
             print(f"Training memory: {memory_for_training:.3f} GB")
             print(f"Memory usage: {(final_memory/self.max_memory)*100:.1f}%")
 
+    def on_epoch_begin(self, args, state, control, **kwargs):
+        """Called at the beginning of each epoch"""
+        pass
+
+    def on_epoch_end(self, args, state, control, **kwargs):
+        """Called at the end of each epoch"""
+        pass
+
+    def on_step_begin(self, args, state, control, **kwargs):
+        """Called at the beginning of each step"""
+        pass
+
+    def on_step_end(self, args, state, control, **kwargs):
+        """Called at the end of each step"""
+        if state.log_history:
+            current_loss = state.log_history[-1].get('loss', None)
+            if current_loss is not None and current_loss < self.best_loss:
+                self.best_loss = current_loss
+                print(f"\nNew best loss: {self.best_loss:.4f}")
+
+    def on_evaluate(self, args, state, control, metrics=None, **kwargs):
+        """Called after evaluation"""
+        if metrics and 'eval_loss' in metrics:
+            print(f"\nEvaluation - Loss: {metrics['eval_loss']:.4f}")
+
     def on_log(self, args, state, control, logs=None, **kwargs):
         """Called when logs need to be displayed"""
         if logs:
             if 'loss' in logs:
                 print(f"Step {state.global_step}: Loss = {logs['loss']:.4f}")
+
+    def on_prediction_step(self, args, state, control, **kwargs):
+        """Called during prediction steps"""
+        pass
+
+    def on_save(self, args, state, control, **kwargs):
+        """Called when saving the model"""
+        pass
 
 def initialize_trainer(model, tokenizer, dataset, max_seq_length):
     training_args = TrainingArguments(
