@@ -183,30 +183,41 @@ class LoggingCallback(TrainerCallback):
 
     def on_step_end(self, args, state, control, model=None, **kwargs):
         if state.global_step % args.logging_steps == 0:
-            if 'loss' in state.log_history[-1]:
-                # Calculer le gradient norm
-                grad_norm = torch.nn.utils.clip_grad_norm_(
-                    model.parameters(), 
-                    args.max_grad_norm
-                ).item()
-                
-                loss = state.log_history[-1]['loss']
-                lr = state.log_history[-1]['learning_rate']
-                print(f"Step {state.global_step}: Loss = {loss:.4f}, Grad Norm = {grad_norm:.4f}, LR = {lr:.2e}")
+            # Vérifier que l'historique des logs existe et n'est pas vide
+            if hasattr(state, 'log_history') and state.log_history:
+                try:
+                    # Calculer le gradient norm
+                    grad_norm = torch.nn.utils.clip_grad_norm_(
+                        model.parameters(), 
+                        args.max_grad_norm
+                    ).item() if model is not None else 0.0
+                    
+                    # Récupérer les métriques du dernier log
+                    last_log = state.log_history[-1]
+                    loss = last_log.get('loss', 0.0)
+                    lr = last_log.get('learning_rate', 0.0)
+                    
+                    print(f"Step {state.global_step}: Loss = {loss:.4f}, Grad Norm = {grad_norm:.4f}, LR = {lr:.2e}")
+                except (IndexError, AttributeError) as e:
+                    print(f"Step {state.global_step}: Metrics not yet available")
 
     def on_evaluate(self, args, state, control, metrics=None, **kwargs):
         if metrics:
-            eval_loss = metrics.get('eval_loss', 0)
-            # Calculer le gradient norm pour l'évaluation aussi
-            grad_norm = torch.nn.utils.clip_grad_norm_(
-                model.parameters(), 
-                args.max_grad_norm
-            ).item() if model is not None else 0.0
-            
-            print(f"Evaluation - Step {state.global_step}: Eval Loss = {eval_loss:.4f}, Grad Norm = {grad_norm:.4f}")
-            if eval_loss < self.best_loss:
-                self.best_loss = eval_loss
-                print(f"New best eval loss: {eval_loss:.4f}")
+            try:
+                eval_loss = metrics.get('eval_loss', 0.0)
+                # Calculer le gradient norm pour l'évaluation
+                grad_norm = torch.nn.utils.clip_grad_norm_(
+                    model.parameters(), 
+                    args.max_grad_norm
+                ).item() if model is not None else 0.0
+                
+                print(f"Evaluation - Step {state.global_step}: Eval Loss = {eval_loss:.4f}, Grad Norm = {grad_norm:.4f}")
+                
+                if eval_loss < self.best_loss:
+                    self.best_loss = eval_loss
+                    print(f"New best eval loss: {eval_loss:.4f}")
+            except Exception as e:
+                print(f"Evaluation - Step {state.global_step}: Metrics calculation failed")
 
 def train_model(model, tokenizer, dataset, training_args, max_seq_length):
     # Créer le callback de logging
