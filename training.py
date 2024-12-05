@@ -177,13 +177,13 @@ def save_checkpoint(model, optimizer, scheduler, loss, step, checkpoint_dir, kee
         for checkpoint in checkpoints[:-keep_last_n]:
             shutil.rmtree(os.path.join(checkpoint_dir, checkpoint))
 
-def train_model(model, tokenizer, dataset, training_args):
+def train_model(model, tokenizer, dataset, training_args, max_seq_length):
     trainer = SFTTrainer(
         model=model,
         tokenizer=tokenizer,
         train_dataset=dataset,
         dataset_text_field="text",
-        max_seq_length=training_args.max_length,
+        max_seq_length=max_seq_length,  # Utiliser la valeur passée en paramètre
         dataset_num_proc=2,
         packing=False,
         args=training_args
@@ -219,19 +219,16 @@ if __name__ == "__main__":
     # Créer le dossier pour les checkpoints
     os.makedirs("checkpoints", exist_ok=True)
     
-    # Variables pour le suivi des performances
-    best_loss = float('inf')
-    eval_steps = 100  # Évaluer tous les 100 steps
-    
-    # Afficher les statistiques de mémoire GPU
+    # Statistiques GPU initiales
     gpu_stats = torch.cuda.get_device_properties(0)
-    start_gpu_memory = round(torch.cuda.max_memory_reserved() / 1024 / 1024 / 1024, 3)
-    max_memory = round(gpu_stats.total_memory / 1024 / 1024 / 1024, 3)
+    max_memory = gpu_stats.total_memory / 1024**3
+    start_gpu_memory = torch.cuda.memory_reserved(0) / 1024**3
+    
     print(f"GPU = {gpu_stats.name}. Max memory = {max_memory} GB.")
     print(f"{start_gpu_memory} GB of memory reserved.")
     
-    # Entraîner le modèle
-    trainer_stats = train_model(model, tokenizer, train_dataset, training_args)
+    # Entraîner le modèle avec max_seq_length
+    trainer_stats = train_model(model, tokenizer, train_dataset, training_args, max_seq_length)
     
     # Évaluer le modèle
     eval_loss = evaluate_model(model, val_dataset, tokenizer)
@@ -242,10 +239,10 @@ if __name__ == "__main__":
 
     # Statistiques finales
     end_time = time.time()
-    used_memory = round(torch.cuda.max_memory_reserved() / 1024 / 1024 / 1024, 3)
-    used_memory_for_lora = round(used_memory - start_gpu_memory, 3)
-    used_percentage = round(used_memory / max_memory * 100, 3)
-    lora_percentage = round(used_memory_for_lora / max_memory * 100, 3)
+    used_memory = torch.cuda.max_memory_reserved() / 1024**3
+    used_memory_for_lora = used_memory - start_gpu_memory
+    used_percentage = used_memory / max_memory * 100
+    lora_percentage = used_memory_for_lora / max_memory * 100
     print(f"{end_time - start_time} seconds used for training.")
     print(f"{round((end_time - start_time)/60, 2)} minutes used for training.")
     print(f"Peak reserved memory = {used_memory} GB.")
