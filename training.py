@@ -282,8 +282,11 @@ def train_model(model, tokenizer, dataset, max_seq_length):
     
     trainer = initialize_trainer(model, tokenizer, dataset, max_seq_length)
     
-    # Utiliser unsloth_train avec le callback
-    trainer_stats = trainer.train(callbacks=[logging_callback])  # Ajouter le callback
+    # Ajouter le callback à la liste des callbacks du trainer
+    trainer.add_callback(logging_callback)
+    
+    # Lancer l'entraînement sans passer les callbacks en argument
+    trainer_stats = trainer.train()
     
     return trainer_stats
 
