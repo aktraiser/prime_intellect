@@ -1,11 +1,10 @@
 ## Imports
 import pandas as pd
 from datasets import Dataset
-from unsloth import FastLanguageModel, is_bfloat16_supported, unsloth_train
-from transformers import TrainingArguments, TrainerCallback
-from trl import SFTTrainer
+from unsloth import FastLanguageModel, is_bfloat16_supported
 import torch
-from transformers import get_scheduler
+from trl import SFTTrainer
+from transformers import TrainingArguments
 import time
 import os
 import shutil
@@ -19,53 +18,45 @@ logger = logging.getLogger(__name__)
 
 def initialize_model(max_seq_length):
     # Configuration recommandée par Unsloth
-    dtype = None  # Auto-détection
-    load_in_4bit = True
-
+    dtype = None  # Auto-détection du dtype
+    
+    logger.info("Loading model with Flash Attention 2...")
     model, tokenizer = FastLanguageModel.from_pretrained(
-        model_name="unsloth/Meta-Llama-3.1-8B-bnb-4bit",
+        model_name="unsloth/Meta-Llama-3.1-8B",
         max_seq_length=max_seq_length,
         dtype=dtype,
-        load_in_4bit=load_in_4bit,
-        device_map="auto"
+        load_in_4bit=False,  # Pas de quantification 4-bit
+        attn_implementation="flash_attention_2",  # Utilisation de Flash Attention 2
+        rope_scaling={"type": "dynamic", "factor": 2.0},
+        trust_remote_code=True
     )
-
+    
+    logger.info("Configuring LoRA with Unsloth optimizations...")
     model = FastLanguageModel.get_peft_model(
         model,
         r=16,
         target_modules=[
-            "q_proj", "k_proj", "v_proj", "o_proj",
-            "gate_proj", "up_proj", "down_proj"
+            "q_proj", 
+            "k_proj", 
+            "v_proj", 
+            "o_proj",
+            "gate_proj", 
+            "up_proj", 
+            "down_proj"
         ],
-        lora_alpha=16,
-        lora_dropout=0,
+        lora_alpha=32,
+        lora_dropout=0.0,
         bias="none",
-        use_gradient_checkpointing="unsloth",
+        use_gradient_checkpointing=True,
         random_state=3407,
-        use_rslora=False,
-        modules_to_save=None
+        use_rslora=True,  # Utilisation de Rank-stabilized LoRA
+        loftq_config={
+            "loftq_bits": 4,
+            "loftq_iter": 1
+        }
     )
 
-    training_args = TrainingArguments(
-        per_device_train_batch_size=1,
-        gradient_accumulation_steps=16,  # Plus grand pour compenser le petit batch_size
-        warmup_steps=100,
-        max_steps=1500,
-        learning_rate=2e-4,
-        fp16=not is_bfloat16_supported(),
-        bf16=is_bfloat16_supported(),
-        logging_steps=5,
-        optim="adamw_8bit",
-        weight_decay=0.01,
-        lr_scheduler_type="cosine",
-        seed=3407,
-        output_dir="outputs",
-        gradient_checkpointing=True,
-        max_grad_norm=1.0,
-        report_to="none"
-    )
-
-    return model, tokenizer, training_args
+    return model, tokenizer
 
 def initialize_dataset(tokenizer, csv_file):
     # Charger le fichier CSV
@@ -193,7 +184,7 @@ def save_checkpoint(model, optimizer, scheduler, loss, step, checkpoint_dir, kee
         for checkpoint in checkpoints[:-keep_last_n]:
             shutil.rmtree(os.path.join(checkpoint_dir, checkpoint))
 
-class LoggingCallback(TrainerCallback):
+class LoggingCallback:
     def __init__(self):
         self.best_loss = float('inf')
         self.start_time = time.time()
@@ -252,10 +243,26 @@ class LoggingCallback(TrainerCallback):
         print(f"Training memory: {memory_for_training}GB")
         print(f"Memory usage: {(final_memory/self.max_memory)*100:.1f}%")
 
-def train_model(model, tokenizer, dataset, training_args, max_seq_length):
-    # Créer le callback de logging
-    logging_callback = LoggingCallback()
-    
+def initialize_trainer(model, tokenizer, dataset, max_seq_length):
+    training_args = TrainingArguments(
+        per_device_train_batch_size=1,
+        gradient_accumulation_steps=16,
+        warmup_steps=10,
+        max_steps=1500,
+        learning_rate=1e-4,
+        fp16=False,  # Désactivé pour stabilité
+        bf16=True,   # Utilisé si disponible
+        logging_steps=1,
+        optim="adamw_8bit",
+        weight_decay=0.01,
+        lr_scheduler_type="cosine",
+        seed=3407,
+        output_dir="outputs",
+        gradient_checkpointing=True,
+        torch_compile=False,  # Désactivé pour éviter les problèmes
+        max_grad_norm=1.0
+    )
+
     trainer = SFTTrainer(
         model=model,
         tokenizer=tokenizer,
@@ -264,19 +271,26 @@ def train_model(model, tokenizer, dataset, training_args, max_seq_length):
         max_seq_length=max_seq_length,
         dataset_num_proc=2,
         packing=False,
-        args=training_args,
-        callbacks=[logging_callback]  # Ajouter le callback
+        args=training_args
     )
     
+    return trainer
+
+def train_model(model, tokenizer, dataset, max_seq_length):
+    # Créer le callback de logging
+    logging_callback = LoggingCallback()
+    
+    trainer = initialize_trainer(model, tokenizer, dataset, max_seq_length)
+    
     # Utiliser unsloth_train avec le callback
-    trainer_stats = unsloth_train(trainer)
+    trainer_stats = trainer.train(callbacks=[logging_callback])  # Ajouter le callback
     
     return trainer_stats
 
 if __name__ == "__main__":
     start_time = time.time()
     max_seq_length = 2048
-    model, tokenizer, training_args = initialize_model(max_seq_length)
+    model, tokenizer = initialize_model(max_seq_length)
 
     # Charger les données
     dataset = initialize_dataset(tokenizer, 'dataset2_comptable.csv')
@@ -294,7 +308,7 @@ if __name__ == "__main__":
     print(f"{start_gpu_memory} GB of memory reserved.")
     
     # Entraîner le modèle avec max_seq_length
-    trainer_stats = train_model(model, tokenizer, train_dataset, training_args, max_seq_length)
+    trainer_stats = train_model(model, tokenizer, train_dataset, max_seq_length)
     
     # Évaluer le modèle
     eval_loss = evaluate_model(model, val_dataset, tokenizer)
