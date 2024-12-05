@@ -50,7 +50,7 @@ def initialize_model(max_seq_length):
         per_device_train_batch_size=1,
         gradient_accumulation_steps=16,  # Plus grand pour compenser le petit batch_size
         warmup_steps=100,
-        max_steps=100,
+        max_steps=10,
         learning_rate=2e-4,
         fp16=not is_bfloat16_supported(),
         bf16=is_bfloat16_supported(),
@@ -137,27 +137,32 @@ def evaluate_model(model, val_dataset, tokenizer, batch_size=1):
     try:
         for i in range(0, len(val_dataset), batch_size):
             batch = val_dataset[i:i + batch_size]
-            inputs = tokenizer(batch['text'], 
-                             truncation=True, 
-                             padding=True, 
-                             return_tensors='pt').to(model.device)
-            
+            inputs = tokenizer(batch['text'], truncation=True, padding=True, return_tensors='pt').to(model.device)
             outputs = model(**inputs)
-            loss = outputs.loss
+            loss = outputs.loss if hasattr(outputs.loss, 'item') else outputs.loss['loss']
             total_loss += loss.item()
             total_batches += 1
-            
-            # Libérer la mémoire
             del outputs, loss, inputs
             torch.cuda.empty_cache()
-            
     except Exception as e:
         print(f"Erreur pendant l'évaluation: {e}")
         model.train()
         return float('inf')
     
     model.train()
-    return total_loss / total_batches
+    return total_loss / total_batches if total_batches > 0 else float('inf')
+
+def save_model(model, tokenizer, output_dir):
+    """Sauvegarde le modèle avec LoRA"""
+    try:
+        logger.info("Merging LoRA adapters...")
+        state_dict = model.get_peft_model_state_dict()
+        model.save_pretrained(output_dir, state_dict=state_dict, safe_serialization=True, max_shard_size="5GB")
+        tokenizer.save_pretrained(output_dir)
+        logger.info("Model saved successfully!")
+    except Exception as e:
+        logger.error(f"Error saving model: {str(e)}")
+        raise
 
 def save_checkpoint(model, optimizer, scheduler, loss, step, checkpoint_dir, keep_last_n=3):
     """Sauvegarde un checkpoint du modèle"""
@@ -261,39 +266,6 @@ def train_model(model, tokenizer, dataset, training_args, max_seq_length):
     trainer_stats = unsloth_train(trainer)
     
     return trainer_stats
-
-def save_model(model, tokenizer, output_dir):
-    """Sauvegarde le modèle en shards avec fusion des adaptateurs LoRA."""
-    try:
-        # 1. Fusionner les adaptateurs LoRA avec le modèle de base
-        logger.info("Merging LoRA adapters...")
-        model = model.merge_and_unload()
-        
-        # 2. Sauvegarder la configuration de quantification
-        model.config.quantization_config = {
-            "load_in_4bit": True,
-            "bnb_4bit_compute_dtype": "float16",
-            "bnb_4bit_use_double_quant": True,
-            "bnb_4bit_quant_type": "nf4"
-        }
-        
-        # 3. Sauvegarder le modèle en shards de ~5GB
-        logger.info(f"Saving sharded model to {output_dir}...")
-        model.save_pretrained(
-            output_dir,
-            safe_serialization=True,
-            save_config=True,
-            max_shard_size="5GB"  # Crée des shards d'environ 5GB
-        )
-        
-        # 4. Sauvegarder le tokenizer
-        tokenizer.save_pretrained(output_dir)
-        
-        logger.info("Model saved successfully!")
-        
-    except Exception as e:
-        logger.error(f"Error saving model: {str(e)}")
-        raise
 
 if __name__ == "__main__":
     start_time = time.time()
