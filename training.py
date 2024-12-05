@@ -50,7 +50,7 @@ def initialize_model(max_seq_length):
         per_device_train_batch_size=1,
         gradient_accumulation_steps=16,  # Plus grand pour compenser le petit batch_size
         warmup_steps=100,
-        max_steps=10,
+        max_steps=100,
         learning_rate=2e-4,
         fp16=not is_bfloat16_supported(),
         bf16=is_bfloat16_supported(),
@@ -153,11 +153,17 @@ def evaluate_model(model, val_dataset, tokenizer, batch_size=1):
     return total_loss / total_batches if total_batches > 0 else float('inf')
 
 def save_model(model, tokenizer, output_dir):
-    """Sauvegarde le modèle avec LoRA"""
+    """Sauvegarde le modèle avec Unsloth LoRA"""
     try:
-        logger.info("Merging LoRA adapters...")
-        state_dict = model.get_peft_model_state_dict()
-        model.save_pretrained(output_dir, state_dict=state_dict, safe_serialization=True, max_shard_size="5GB")
+        logger.info("Saving model with Unsloth...")
+        # Pour Unsloth, on utilise directement save_pretrained
+        model.save_pretrained(
+            output_dir,
+            safe_serialization=True,
+            max_shard_size="5GB"
+        )
+        
+        # Sauvegarder le tokenizer
         tokenizer.save_pretrained(output_dir)
         logger.info("Model saved successfully!")
     except Exception as e:
