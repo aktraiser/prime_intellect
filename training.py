@@ -188,60 +188,45 @@ class LoggingCallback:
     def __init__(self):
         self.best_loss = float('inf')
         self.start_time = time.time()
-        self.start_gpu_memory = round(torch.cuda.max_memory_reserved() / 1024 / 1024 / 1024, 3)
-        gpu_stats = torch.cuda.get_device_properties(0)
-        self.max_memory = round(gpu_stats.total_memory / 1024 / 1024 / 1024, 3)
+        if torch.cuda.is_available():
+            self.max_memory = torch.cuda.get_device_properties(0).total_memory / (1024**3)
+            self.initial_memory = torch.cuda.memory_reserved() / (1024**3)
 
-    def on_train_begin(self, args, state, control, model=None, **kwargs):
+    def on_epoch_begin(self, args, state, control, **kwargs):
+        """Called at the beginning of every epoch"""
+        pass
+
+    def on_step_end(self, args, state, control, **kwargs):
+        """Called at the end of every step"""
+        if state.log_history:
+            current_loss = state.log_history[-1].get('loss', None)
+            if current_loss is not None and current_loss < self.best_loss:
+                self.best_loss = current_loss
+                print(f"\nNew best loss: {self.best_loss:.4f}")
+
+    def on_train_begin(self, args, state, control, **kwargs):
+        """Called at the beginning of training"""
         print(f"Starting training with {args.max_steps} steps")
-        print(f"Initial GPU memory reserved: {self.start_gpu_memory} GB")
-
-    def on_step_end(self, args, state, control, model=None, **kwargs):
-        if state.global_step % args.logging_steps == 0:
-            try:
-                current_memory = round(torch.cuda.max_memory_reserved() / 1024 / 1024 / 1024, 3)
-                memory_used = round(current_memory - self.start_gpu_memory, 3)
-                elapsed_time = time.time() - self.start_time
-                
-                if state.log_history:
-                    last_log = state.log_history[-1]
-                    loss = last_log.get('loss', 0.0)
-                    lr = last_log.get('learning_rate', 0.0)
-                    grad_norm = last_log.get('grad_norm', 0.0)
-                    
-                    print(f"\nStep {state.global_step}/{args.max_steps} "
-                          f"[{state.global_step/args.max_steps*100:.1f}%]")
-                    print(f"Loss: {loss:.4f} | Grad Norm: {grad_norm:.4f} | LR: {lr:.2e}")
-                    print(f"Memory: {current_memory}GB (+{memory_used}GB) | "
-                          f"Time: {elapsed_time/60:.1f}min | "
-                          f"Speed: {elapsed_time/state.global_step:.1f}s/it")
-            except Exception as e:
-                print(f"Step {state.global_step}: Logging failed - {str(e)}")
-
-    def on_evaluate(self, args, state, control, metrics=None, **kwargs):
-        if metrics and 'eval_loss' in metrics:
-            eval_loss = metrics['eval_loss']
-            print(f"\nEvaluation - Step {state.global_step}")
-            print(f"Eval Loss: {eval_loss:.4f}")
-            
-            if eval_loss < self.best_loss:
-                self.best_loss = eval_loss
-                print(f"New best eval loss: {eval_loss:.4f}\n")
+        print(f"Initial GPU memory reserved: {self.initial_memory:.3f} GB")
 
     def on_train_end(self, args, state, control, **kwargs):
-        end_time = time.time()
-        training_time = end_time - self.start_time
-        final_memory = round(torch.cuda.max_memory_reserved() / 1024 / 1024 / 1024, 3)
-        memory_for_training = round(final_memory - self.start_gpu_memory, 3)
+        """Called at the end of training"""
+        training_time = time.time() - self.start_time
+        print(f"\nTraining completed in {training_time/60:.2f} minutes")
+        print(f"Best loss achieved: {self.best_loss:.4f}")
         
-        print("\n=== Training Summary ===")
-        print(f"Total time: {training_time/60:.1f} minutes")
-        print(f"Final loss: {state.log_history[-1].get('loss', 0.0):.4f}")
-        print(f"Best eval loss: {self.best_loss:.4f}")
-        print("\n=== Memory Usage ===")
-        print(f"Peak GPU memory: {final_memory}GB")
-        print(f"Training memory: {memory_for_training}GB")
-        print(f"Memory usage: {(final_memory/self.max_memory)*100:.1f}%")
+        if torch.cuda.is_available():
+            final_memory = torch.cuda.memory_reserved() / (1024**3)
+            memory_for_training = final_memory - self.initial_memory
+            print(f"Final GPU memory: {final_memory:.3f} GB")
+            print(f"Training memory: {memory_for_training:.3f} GB")
+            print(f"Memory usage: {(final_memory/self.max_memory)*100:.1f}%")
+
+    def on_log(self, args, state, control, logs=None, **kwargs):
+        """Called when logs need to be displayed"""
+        if logs:
+            if 'loss' in logs:
+                print(f"Step {state.global_step}: Loss = {logs['loss']:.4f}")
 
 def initialize_trainer(model, tokenizer, dataset, max_seq_length):
     training_args = TrainingArguments(
@@ -322,7 +307,7 @@ if __name__ == "__main__":
 
     # Statistiques finales
     end_time = time.time()
-    used_memory = torch.cuda.max_memory_reserved() / 1024**3
+    used_memory = torch.cuda.memory_reserved() / 1024**3
     used_memory_for_lora = used_memory - start_gpu_memory
     used_percentage = used_memory / max_memory * 100
     lora_percentage = used_memory_for_lora / max_memory * 100
