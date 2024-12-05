@@ -1,7 +1,7 @@
 ## Imports
 import pandas as pd
 from datasets import Dataset
-from unsloth import FastLanguageModel, is_bfloat16_supported
+from unsloth import FastLanguageModel, is_bfloat16_supported, unsloth_train
 from transformers import TrainingArguments
 from trl import SFTTrainer
 import torch
@@ -14,10 +14,9 @@ torch.cuda.empty_cache()
 
 def initialize_model(max_seq_length):
     # Configuration recommandée par Unsloth
-    dtype = None  # None pour auto-détection (Bfloat16 pour A100)
+    dtype = None  # Auto-détection
     load_in_4bit = True
 
-    # Chargement du modèle avec les paramètres optimisés
     model, tokenizer = FastLanguageModel.from_pretrained(
         model_name="unsloth/Meta-Llama-3.1-8B-bnb-4bit",
         max_seq_length=max_seq_length,
@@ -26,71 +25,42 @@ def initialize_model(max_seq_length):
         device_map="auto"
     )
 
-    # Configuration LoRA optimisée selon Unsloth
     model = FastLanguageModel.get_peft_model(
         model,
         r=16,
         target_modules=[
-            "q_proj",
-            "k_proj",
-            "v_proj",
-            "o_proj",
-            "gate_proj",
-            "up_proj",
-            "down_proj"
+            "q_proj", "k_proj", "v_proj", "o_proj",
+            "gate_proj", "up_proj", "down_proj"
         ],
         lora_alpha=16,
         lora_dropout=0,
         bias="none",
-        use_gradient_checkpointing="unsloth",  # Optimisation Unsloth pour 30% moins de VRAM
+        use_gradient_checkpointing="unsloth",
         random_state=3407,
         use_rslora=False,
         modules_to_save=None
     )
 
-    # Configuration des arguments d'entraînement selon Unsloth
     training_args = TrainingArguments(
-        # Batch size et accumulation
-        per_device_train_batch_size=1,         # Réduit de 2 à 1 pour éviter les OOM
-        gradient_accumulation_steps=16,        # Augmenté pour compenser la réduction du batch size
-        
-        # Learning rate et scheduling
-        learning_rate=1e-4,                    # Réduit pour plus de stabilité
-        warmup_steps=100,                      # Augmenté pour un warmup plus progressif
-        max_steps=1000,                        # Réduit pour éviter le rate limit
-        lr_scheduler_type="cosine",            # Meilleure convergence
-        
-        # Optimisation mémoire
+        per_device_train_batch_size=1,
+        gradient_accumulation_steps=16,  # Plus grand pour compenser le petit batch_size
+        warmup_steps=100,
+        max_steps=1500,
+        learning_rate=2e-4,
         fp16=not is_bfloat16_supported(),
         bf16=is_bfloat16_supported(),
-        gradient_checkpointing=True,
-        max_grad_norm=1.0,                     # Réduit pour plus de stabilité
-        
-        # Autres paramètres
-        logging_steps=5,                       # Réduit la fréquence des logs
+        logging_steps=5,
         optim="adamw_8bit",
-        weight_decay=0.05,                     # Augmenté pour une meilleure régularisation
+        weight_decay=0.01,
+        lr_scheduler_type="cosine",
         seed=3407,
         output_dir="outputs",
+        gradient_checkpointing=True,
+        max_grad_norm=1.0,
         report_to="none"
     )
 
-    # Create optimizer
-    optimizer = torch.optim.AdamW(
-        model.parameters(),
-        lr=training_args.learning_rate,
-        weight_decay=training_args.weight_decay
-    )
-
-    # Create scheduler
-    lr_scheduler = get_scheduler(
-        name="cosine",
-        optimizer=optimizer,
-        num_warmup_steps=training_args.warmup_steps,
-        num_training_steps=training_args.max_steps
-    )
-
-    return model, tokenizer, training_args, lr_scheduler
+    return model, tokenizer, training_args
 
 def initialize_dataset(tokenizer, csv_file):
     # Charger le fichier CSV
@@ -207,21 +177,22 @@ def save_checkpoint(model, optimizer, scheduler, loss, step, checkpoint_dir, kee
         for checkpoint in checkpoints[:-keep_last_n]:
             shutil.rmtree(os.path.join(checkpoint_dir, checkpoint))
 
-def initialize_trainer(model, tokenizer, dataset, max_seq_length, training_args):
-    # Créer les datasets d'entraînement et de validation
-    train_dataset, val_dataset = create_validation_dataset(dataset)
-    
+def train_model(model, tokenizer, dataset, training_args):
     trainer = SFTTrainer(
         model=model,
         tokenizer=tokenizer,
-        train_dataset=train_dataset,
+        train_dataset=dataset,
         dataset_text_field="text",
-        max_seq_length=max_seq_length,
+        max_seq_length=training_args.max_length,
         dataset_num_proc=2,
         packing=False,
-        args=training_args,
+        args=training_args
     )
-    return trainer, val_dataset
+    
+    # Utiliser unsloth_train au lieu de trainer.train()
+    trainer_stats = unsloth_train(trainer)
+    
+    return trainer_stats
 
 def save_model(model, tokenizer, output_dir):
     # Supprimer les attributs spécifiques à l'entraînement
@@ -239,11 +210,11 @@ def save_model(model, tokenizer, output_dir):
 if __name__ == "__main__":
     start_time = time.time()
     max_seq_length = 2048
-    model, tokenizer, training_args, lr_scheduler = initialize_model(max_seq_length)
+    model, tokenizer, training_args = initialize_model(max_seq_length)
 
     # Charger les données
     dataset = initialize_dataset(tokenizer, 'dataset2_comptable.csv')
-    trainer, val_dataset = initialize_trainer(model, tokenizer, dataset, max_seq_length, training_args)
+    train_dataset, val_dataset = create_validation_dataset(dataset)
 
     # Créer le dossier pour les checkpoints
     os.makedirs("checkpoints", exist_ok=True)
@@ -259,44 +230,15 @@ if __name__ == "__main__":
     print(f"GPU = {gpu_stats.name}. Max memory = {max_memory} GB.")
     print(f"{start_gpu_memory} GB of memory reserved.")
     
-    # Modifier la méthode d'entraînement pour inclure l'évaluation
-    for step, batch in enumerate(trainer.get_train_dataloader()):
-        if step >= training_args.max_steps:
-            break
-            
-        loss = trainer.training_step(model, batch)
-        
-        # Calculer le gradient norm
-        grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), training_args.max_grad_norm).item()
-        
-        # Évaluation périodique
-        if step > 0 and step % eval_steps == 0:
-            eval_loss = evaluate_model(model, val_dataset, tokenizer)
-            print(f"Step {step}: Train Loss = {loss.item():.4f}, Eval Loss = {eval_loss:.4f}, Grad Norm = {grad_norm:.4f}, LR = {lr_scheduler.get_last_lr()[0]:.2e}")
-            
-            # Sauvegarder si meilleur modèle
-            if eval_loss < best_loss:
-                best_loss = eval_loss
-                save_checkpoint(
-                    model, 
-                    trainer.optimizer, 
-                    lr_scheduler,
-                    eval_loss,
-                    step,
-                    "checkpoints"
-                )
-            
-            # Libérer la mémoire
-            torch.cuda.empty_cache()
-        
-        # Log normal avec grad_norm
-        if step % training_args.logging_steps == 0:
-            print(f"Step {step}: Loss = {loss.item():.4f}, Grad Norm = {grad_norm:.4f}, LR = {lr_scheduler.get_last_lr()[0]:.2e}")
-
-        # Mettre à jour l'optimizer et le scheduler
-        trainer.optimizer.step()
-        lr_scheduler.step()
-        trainer.optimizer.zero_grad()
+    # Entraîner le modèle
+    trainer_stats = train_model(model, tokenizer, train_dataset, training_args)
+    
+    # Évaluer le modèle
+    eval_loss = evaluate_model(model, val_dataset, tokenizer)
+    print(f"Eval Loss = {eval_loss:.4f}")
+    
+    # Sauvegarder le modèle
+    save_model(model, tokenizer, 'peft_model')
 
     # Statistiques finales
     end_time = time.time()
@@ -310,9 +252,6 @@ if __name__ == "__main__":
     print(f"Peak reserved memory for training = {used_memory_for_lora} GB.")
     print(f"Peak reserved memory % of max memory = {used_percentage} %.")
     print(f"Peak reserved memory for training % of max memory = {lora_percentage} %.")
-
-    # Sauvegarder l'adaptateur LoRA
-    save_model(model, tokenizer, 'peft_model')
 
     # Fusionner les poids LoRA avec le modèle de base et sauvegarder
     merged_model = model.merge_and_unload()
