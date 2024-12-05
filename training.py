@@ -10,7 +10,12 @@ import time
 import os
 import shutil
 from pathlib import Path
+import logging
 torch.cuda.empty_cache()
+
+# Configuration du logger
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 def initialize_model(max_seq_length):
     # Configuration recommandée par Unsloth
@@ -45,7 +50,7 @@ def initialize_model(max_seq_length):
         per_device_train_batch_size=1,
         gradient_accumulation_steps=16,  # Plus grand pour compenser le petit batch_size
         warmup_steps=100,
-        max_steps=1500,
+        max_steps=100,
         learning_rate=2e-4,
         fp16=not is_bfloat16_supported(),
         bf16=is_bfloat16_supported(),
@@ -197,13 +202,17 @@ class LoggingCallback(TrainerCallback):
                 elapsed_time = time.time() - self.start_time
                 
                 if state.log_history:
-                    loss = state.log_history[-1].get('loss', 0.0)
-                    lr = state.log_history[-1].get('learning_rate', 0.0)
-                    print(f"Step {state.global_step}/{args.max_steps} "
-                          f"[{state.global_step/args.max_steps*100:.1f}%] - "
-                          f"Loss: {loss:.4f}, LR: {lr:.2e}")
-                    print(f"Memory: {current_memory}GB ({memory_used}GB increase) - "
-                          f"Time: {elapsed_time/60:.2f}min")
+                    last_log = state.log_history[-1]
+                    loss = last_log.get('loss', 0.0)
+                    lr = last_log.get('learning_rate', 0.0)
+                    grad_norm = last_log.get('grad_norm', 0.0)
+                    
+                    print(f"\nStep {state.global_step}/{args.max_steps} "
+                          f"[{state.global_step/args.max_steps*100:.1f}%]")
+                    print(f"Loss: {loss:.4f} | Grad Norm: {grad_norm:.4f} | LR: {lr:.2e}")
+                    print(f"Memory: {current_memory}GB (+{memory_used}GB) | "
+                          f"Time: {elapsed_time/60:.1f}min | "
+                          f"Speed: {elapsed_time/state.global_step:.1f}s/it")
             except Exception as e:
                 print(f"Step {state.global_step}: Logging failed - {str(e)}")
 
@@ -223,12 +232,14 @@ class LoggingCallback(TrainerCallback):
         final_memory = round(torch.cuda.max_memory_reserved() / 1024 / 1024 / 1024, 3)
         memory_for_training = round(final_memory - self.start_gpu_memory, 3)
         
-        print("\nTraining completed!")
-        print(f"Total training time: {training_time/60:.2f} minutes")
-        print(f"Peak GPU memory: {final_memory}GB")
-        print(f"Memory used for training: {memory_for_training}GB")
-        print(f"Memory usage %: {(final_memory/self.max_memory)*100:.1f}%")
+        print("\n=== Training Summary ===")
+        print(f"Total time: {training_time/60:.1f} minutes")
+        print(f"Final loss: {state.log_history[-1].get('loss', 0.0):.4f}")
         print(f"Best eval loss: {self.best_loss:.4f}")
+        print("\n=== Memory Usage ===")
+        print(f"Peak GPU memory: {final_memory}GB")
+        print(f"Training memory: {memory_for_training}GB")
+        print(f"Memory usage: {(final_memory/self.max_memory)*100:.1f}%")
 
 def train_model(model, tokenizer, dataset, training_args, max_seq_length):
     # Créer le callback de logging
@@ -252,17 +263,37 @@ def train_model(model, tokenizer, dataset, training_args, max_seq_length):
     return trainer_stats
 
 def save_model(model, tokenizer, output_dir):
-    # Supprimer les attributs spécifiques à l'entraînement
-    if hasattr(model, 'module'):
-        model = model.module
-
-    # Sauvegarder avec la configuration complète
-    model.save_pretrained(
-        output_dir,
-        safe_serialization=True,
-        max_shard_size="10GB"
-    )
-    tokenizer.save_pretrained(output_dir)
+    """Sauvegarde le modèle en shards avec fusion des adaptateurs LoRA."""
+    try:
+        # 1. Fusionner les adaptateurs LoRA avec le modèle de base
+        logger.info("Merging LoRA adapters...")
+        model = model.merge_and_unload()
+        
+        # 2. Sauvegarder la configuration de quantification
+        model.config.quantization_config = {
+            "load_in_4bit": True,
+            "bnb_4bit_compute_dtype": "float16",
+            "bnb_4bit_use_double_quant": True,
+            "bnb_4bit_quant_type": "nf4"
+        }
+        
+        # 3. Sauvegarder le modèle en shards de ~5GB
+        logger.info(f"Saving sharded model to {output_dir}...")
+        model.save_pretrained(
+            output_dir,
+            safe_serialization=True,
+            save_config=True,
+            max_shard_size="5GB"  # Crée des shards d'environ 5GB
+        )
+        
+        # 4. Sauvegarder le tokenizer
+        tokenizer.save_pretrained(output_dir)
+        
+        logger.info("Model saved successfully!")
+        
+    except Exception as e:
+        logger.error(f"Error saving model: {str(e)}")
+        raise
 
 if __name__ == "__main__":
     start_time = time.time()
