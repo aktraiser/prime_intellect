@@ -180,44 +180,55 @@ def save_checkpoint(model, optimizer, scheduler, loss, step, checkpoint_dir, kee
 class LoggingCallback(TrainerCallback):
     def __init__(self):
         self.best_loss = float('inf')
+        self.start_time = time.time()
+        self.start_gpu_memory = round(torch.cuda.max_memory_reserved() / 1024 / 1024 / 1024, 3)
+        gpu_stats = torch.cuda.get_device_properties(0)
+        self.max_memory = round(gpu_stats.total_memory / 1024 / 1024 / 1024, 3)
+
+    def on_train_begin(self, args, state, control, model=None, **kwargs):
+        print(f"Starting training with {args.max_steps} steps")
+        print(f"Initial GPU memory reserved: {self.start_gpu_memory} GB")
 
     def on_step_end(self, args, state, control, model=None, **kwargs):
         if state.global_step % args.logging_steps == 0:
-            # Vérifier que l'historique des logs existe et n'est pas vide
-            if hasattr(state, 'log_history') and state.log_history:
-                try:
-                    # Calculer le gradient norm
-                    grad_norm = torch.nn.utils.clip_grad_norm_(
-                        model.parameters(), 
-                        args.max_grad_norm
-                    ).item() if model is not None else 0.0
-                    
-                    # Récupérer les métriques du dernier log
-                    last_log = state.log_history[-1]
-                    loss = last_log.get('loss', 0.0)
-                    lr = last_log.get('learning_rate', 0.0)
-                    
-                    print(f"Step {state.global_step}: Loss = {loss:.4f}, Grad Norm = {grad_norm:.4f}, LR = {lr:.2e}")
-                except (IndexError, AttributeError) as e:
-                    print(f"Step {state.global_step}: Metrics not yet available")
+            try:
+                current_memory = round(torch.cuda.max_memory_reserved() / 1024 / 1024 / 1024, 3)
+                memory_used = round(current_memory - self.start_gpu_memory, 3)
+                elapsed_time = time.time() - self.start_time
+                
+                if state.log_history:
+                    loss = state.log_history[-1].get('loss', 0.0)
+                    lr = state.log_history[-1].get('learning_rate', 0.0)
+                    print(f"Step {state.global_step}/{args.max_steps} "
+                          f"[{state.global_step/args.max_steps*100:.1f}%] - "
+                          f"Loss: {loss:.4f}, LR: {lr:.2e}")
+                    print(f"Memory: {current_memory}GB ({memory_used}GB increase) - "
+                          f"Time: {elapsed_time/60:.2f}min")
+            except Exception as e:
+                print(f"Step {state.global_step}: Logging failed - {str(e)}")
 
     def on_evaluate(self, args, state, control, metrics=None, **kwargs):
-        if metrics:
-            try:
-                eval_loss = metrics.get('eval_loss', 0.0)
-                # Calculer le gradient norm pour l'évaluation
-                grad_norm = torch.nn.utils.clip_grad_norm_(
-                    model.parameters(), 
-                    args.max_grad_norm
-                ).item() if model is not None else 0.0
-                
-                print(f"Evaluation - Step {state.global_step}: Eval Loss = {eval_loss:.4f}, Grad Norm = {grad_norm:.4f}")
-                
-                if eval_loss < self.best_loss:
-                    self.best_loss = eval_loss
-                    print(f"New best eval loss: {eval_loss:.4f}")
-            except Exception as e:
-                print(f"Evaluation - Step {state.global_step}: Metrics calculation failed")
+        if metrics and 'eval_loss' in metrics:
+            eval_loss = metrics['eval_loss']
+            print(f"\nEvaluation - Step {state.global_step}")
+            print(f"Eval Loss: {eval_loss:.4f}")
+            
+            if eval_loss < self.best_loss:
+                self.best_loss = eval_loss
+                print(f"New best eval loss: {eval_loss:.4f}\n")
+
+    def on_train_end(self, args, state, control, **kwargs):
+        end_time = time.time()
+        training_time = end_time - self.start_time
+        final_memory = round(torch.cuda.max_memory_reserved() / 1024 / 1024 / 1024, 3)
+        memory_for_training = round(final_memory - self.start_gpu_memory, 3)
+        
+        print("\nTraining completed!")
+        print(f"Total training time: {training_time/60:.2f} minutes")
+        print(f"Peak GPU memory: {final_memory}GB")
+        print(f"Memory used for training: {memory_for_training}GB")
+        print(f"Memory usage %: {(final_memory/self.max_memory)*100:.1f}%")
+        print(f"Best eval loss: {self.best_loss:.4f}")
 
 def train_model(model, tokenizer, dataset, training_args, max_seq_length):
     # Créer le callback de logging
