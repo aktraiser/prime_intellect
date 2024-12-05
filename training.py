@@ -2,7 +2,7 @@
 import pandas as pd
 from datasets import Dataset
 from unsloth import FastLanguageModel, is_bfloat16_supported, unsloth_train
-from transformers import TrainingArguments
+from transformers import TrainingArguments, TrainerCallback
 from trl import SFTTrainer
 import torch
 from transformers import get_scheduler
@@ -177,19 +177,54 @@ def save_checkpoint(model, optimizer, scheduler, loss, step, checkpoint_dir, kee
         for checkpoint in checkpoints[:-keep_last_n]:
             shutil.rmtree(os.path.join(checkpoint_dir, checkpoint))
 
+class LoggingCallback(TrainerCallback):
+    def __init__(self):
+        self.best_loss = float('inf')
+
+    def on_step_end(self, args, state, control, model=None, **kwargs):
+        if state.global_step % args.logging_steps == 0:
+            if 'loss' in state.log_history[-1]:
+                # Calculer le gradient norm
+                grad_norm = torch.nn.utils.clip_grad_norm_(
+                    model.parameters(), 
+                    args.max_grad_norm
+                ).item()
+                
+                loss = state.log_history[-1]['loss']
+                lr = state.log_history[-1]['learning_rate']
+                print(f"Step {state.global_step}: Loss = {loss:.4f}, Grad Norm = {grad_norm:.4f}, LR = {lr:.2e}")
+
+    def on_evaluate(self, args, state, control, metrics=None, **kwargs):
+        if metrics:
+            eval_loss = metrics.get('eval_loss', 0)
+            # Calculer le gradient norm pour l'évaluation aussi
+            grad_norm = torch.nn.utils.clip_grad_norm_(
+                model.parameters(), 
+                args.max_grad_norm
+            ).item() if model is not None else 0.0
+            
+            print(f"Evaluation - Step {state.global_step}: Eval Loss = {eval_loss:.4f}, Grad Norm = {grad_norm:.4f}")
+            if eval_loss < self.best_loss:
+                self.best_loss = eval_loss
+                print(f"New best eval loss: {eval_loss:.4f}")
+
 def train_model(model, tokenizer, dataset, training_args, max_seq_length):
+    # Créer le callback de logging
+    logging_callback = LoggingCallback()
+    
     trainer = SFTTrainer(
         model=model,
         tokenizer=tokenizer,
         train_dataset=dataset,
         dataset_text_field="text",
-        max_seq_length=max_seq_length,  # Utiliser la valeur passée en paramètre
+        max_seq_length=max_seq_length,
         dataset_num_proc=2,
         packing=False,
-        args=training_args
+        args=training_args,
+        callbacks=[logging_callback]  # Ajouter le callback
     )
     
-    # Utiliser unsloth_train au lieu de trainer.train()
+    # Utiliser unsloth_train avec le callback
     trainer_stats = unsloth_train(trainer)
     
     return trainer_stats
