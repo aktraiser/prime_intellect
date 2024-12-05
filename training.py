@@ -7,6 +7,9 @@ from trl import SFTTrainer
 from transformers import TrainingArguments, get_scheduler, AutoTokenizer
 from unsloth import is_bfloat16_supported
 import time
+import os
+import shutil
+from pathlib import Path
 torch.cuda.empty_cache()
 
 def initialize_model(max_seq_length):
@@ -135,18 +138,84 @@ def initialize_dataset(tokenizer, csv_file):
 
     return dataset
 
+def create_validation_dataset(dataset, val_size=0.1, seed=42):
+    """Crée un dataset de validation à partir du dataset d'entraînement"""
+    dataset = dataset.shuffle(seed=seed)
+    val_size = int(len(dataset) * val_size)
+    train_dataset = dataset.select(range(len(dataset) - val_size))
+    val_dataset = dataset.select(range(len(dataset) - val_size, len(dataset)))
+    return train_dataset, val_dataset
+
+@torch.no_grad()
+def evaluate_model(model, val_dataset, tokenizer, batch_size=1):
+    """Évalue le modèle sur le dataset de validation"""
+    model.eval()
+    total_loss = 0
+    total_batches = 0
+    
+    try:
+        for i in range(0, len(val_dataset), batch_size):
+            batch = val_dataset[i:i + batch_size]
+            inputs = tokenizer(batch['text'], 
+                             truncation=True, 
+                             padding=True, 
+                             return_tensors='pt').to(model.device)
+            
+            outputs = model(**inputs)
+            loss = outputs.loss
+            total_loss += loss.item()
+            total_batches += 1
+            
+            # Libérer la mémoire
+            del outputs, loss, inputs
+            torch.cuda.empty_cache()
+            
+    except Exception as e:
+        print(f"Erreur pendant l'évaluation: {e}")
+        model.train()
+        return float('inf')
+    
+    model.train()
+    return total_loss / total_batches
+
+def save_checkpoint(model, optimizer, scheduler, loss, step, checkpoint_dir, keep_last_n=3):
+    """Sauvegarde un checkpoint du modèle"""
+    checkpoint_path = Path(checkpoint_dir) / f"checkpoint_{step}"
+    os.makedirs(checkpoint_path, exist_ok=True)
+    
+    # Sauvegarder uniquement les adaptateurs LoRA
+    model.save_pretrained(checkpoint_path)
+    
+    # Sauvegarder l'état de l'optimiseur et du scheduler
+    torch.save({
+        'step': step,
+        'optimizer_state_dict': optimizer.state_dict(),
+        'scheduler_state_dict': scheduler.state_dict(),
+        'loss': loss
+    }, checkpoint_path / "training_state.pt")
+    
+    # Nettoyer les anciens checkpoints
+    checkpoints = sorted([d for d in os.listdir(checkpoint_dir) 
+                         if d.startswith("checkpoint_")])
+    if len(checkpoints) > keep_last_n:
+        for checkpoint in checkpoints[:-keep_last_n]:
+            shutil.rmtree(os.path.join(checkpoint_dir, checkpoint))
+
 def initialize_trainer(model, tokenizer, dataset, max_seq_length, training_args):
+    # Créer les datasets d'entraînement et de validation
+    train_dataset, val_dataset = create_validation_dataset(dataset)
+    
     trainer = SFTTrainer(
         model=model,
         tokenizer=tokenizer,
-        train_dataset=dataset,
+        train_dataset=train_dataset,
         dataset_text_field="text",
         max_seq_length=max_seq_length,
         dataset_num_proc=2,
         packing=False,
         args=training_args,
     )
-    return trainer
+    return trainer, val_dataset
 
 def save_model(model, tokenizer, output_dir):
     # Supprimer les attributs spécifiques à l'entraînement
@@ -166,23 +235,65 @@ if __name__ == "__main__":
     max_seq_length = 2048
     model, tokenizer, training_args, lr_scheduler = initialize_model(max_seq_length)
 
-    # Charger les données à partir du fichier CSV
+    # Charger les données
     dataset = initialize_dataset(tokenizer, 'dataset2_comptable.csv')
+    trainer, val_dataset = initialize_trainer(model, tokenizer, dataset, max_seq_length, training_args)
 
-    trainer = initialize_trainer(model, tokenizer, dataset, max_seq_length, training_args)
-
+    # Créer le dossier pour les checkpoints
+    os.makedirs("checkpoints", exist_ok=True)
+    
+    # Variables pour le suivi des performances
+    best_loss = float('inf')
+    eval_steps = 100  # Évaluer tous les 100 steps
+    
     # Afficher les statistiques de mémoire GPU
     gpu_stats = torch.cuda.get_device_properties(0)
     start_gpu_memory = round(torch.cuda.max_memory_reserved() / 1024 / 1024 / 1024, 3)
     max_memory = round(gpu_stats.total_memory / 1024 / 1024 / 1024, 3)
     print(f"GPU = {gpu_stats.name}. Max memory = {max_memory} GB.")
     print(f"{start_gpu_memory} GB of memory reserved.")
+    
+    # Modifier la méthode d'entraînement pour inclure l'évaluation
+    for step, batch in enumerate(trainer.get_train_dataloader()):
+        if step >= training_args.max_steps:
+            break
+            
+        loss = trainer.training_step(model, batch)
+        
+        # Calculer le gradient norm
+        grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), training_args.max_grad_norm).item()
+        
+        # Évaluation périodique
+        if step > 0 and step % eval_steps == 0:
+            eval_loss = evaluate_model(model, val_dataset, tokenizer)
+            print(f"Step {step}: Train Loss = {loss.item():.4f}, Eval Loss = {eval_loss:.4f}, Grad Norm = {grad_norm:.4f}, LR = {lr_scheduler.get_last_lr()[0]:.2e}")
+            
+            # Sauvegarder si meilleur modèle
+            if eval_loss < best_loss:
+                best_loss = eval_loss
+                save_checkpoint(
+                    model, 
+                    trainer.optimizer, 
+                    lr_scheduler,
+                    eval_loss,
+                    step,
+                    "checkpoints"
+                )
+            
+            # Libérer la mémoire
+            torch.cuda.empty_cache()
+        
+        # Log normal avec grad_norm
+        if step % training_args.logging_steps == 0:
+            print(f"Step {step}: Loss = {loss.item():.4f}, Grad Norm = {grad_norm:.4f}, LR = {lr_scheduler.get_last_lr()[0]:.2e}")
 
-    # Entraîner le modèle
-    trainer.train()
+        # Mettre à jour l'optimizer et le scheduler
+        trainer.optimizer.step()
+        lr_scheduler.step()
+        trainer.optimizer.zero_grad()
 
+    # Statistiques finales
     end_time = time.time()
-    # Afficher les statistiques finales de mémoire et de temps
     used_memory = round(torch.cuda.max_memory_reserved() / 1024 / 1024 / 1024, 3)
     used_memory_for_lora = round(used_memory - start_gpu_memory, 3)
     used_percentage = round(used_memory / max_memory * 100, 3)
@@ -202,3 +313,4 @@ if __name__ == "__main__":
     save_model(merged_model, tokenizer, 'llama_model_merged')
 
     print("Modèle fusionné et sauvegardé avec succès.")
+
