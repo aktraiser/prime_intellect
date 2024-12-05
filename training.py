@@ -1,11 +1,11 @@
 ## Imports
 import pandas as pd
 from datasets import Dataset
-from unsloth import FastLanguageModel
-import torch
+from unsloth import FastLanguageModel, is_bfloat16_supported
+from transformers import TrainingArguments
 from trl import SFTTrainer
-from transformers import TrainingArguments, get_scheduler, AutoTokenizer
-from unsloth import is_bfloat16_supported
+import torch
+from transformers import get_scheduler
 import time
 import os
 import shutil
@@ -13,23 +13,23 @@ from pathlib import Path
 torch.cuda.empty_cache()
 
 def initialize_model(max_seq_length):
-    dtype = None  # None for auto detection. Float16 for Tesla T4, V100, Bfloat16 for Ampere+
-    load_in_4bit = True  # Use 4bit quantization to reduce memory usage
+    # Configuration recommandée par Unsloth
+    dtype = None  # None pour auto-détection (Bfloat16 pour A100)
+    load_in_4bit = True
 
-    # Charger le modèle de base avec la configuration mise à jour
+    # Chargement du modèle avec les paramètres optimisés
     model, tokenizer = FastLanguageModel.from_pretrained(
         model_name="unsloth/Meta-Llama-3.1-8B-bnb-4bit",
         max_seq_length=max_seq_length,
-        load_in_4bit=True,
-        load_in_8bit=False,
-        dtype=None,
-        device_map="auto"  # Ajout de device_map pour une meilleure gestion GPU
+        dtype=dtype,
+        load_in_4bit=load_in_4bit,
+        device_map="auto"
     )
 
-    # Configuration LoRA optimisée pour Unsloth
+    # Configuration LoRA optimisée selon Unsloth
     model = FastLanguageModel.get_peft_model(
         model,
-        r=16,  # Rang de la matrice LoRA
+        r=16,
         target_modules=[
             "q_proj",
             "k_proj",
@@ -42,43 +42,49 @@ def initialize_model(max_seq_length):
         lora_alpha=16,
         lora_dropout=0,
         bias="none",
-        use_gradient_checkpointing=True,
-        random_state=42,
+        use_gradient_checkpointing="unsloth",  # Optimisation Unsloth pour 30% moins de VRAM
+        random_state=3407,
         use_rslora=False,
-        modules_to_save=None  # Ajout pour la compatibilité
+        modules_to_save=None
     )
 
-    # Configuration des arguments d'entraînement
+    # Configuration des arguments d'entraînement selon Unsloth
     training_args = TrainingArguments(
-        per_device_train_batch_size=2,
-        gradient_accumulation_steps=8,  # Augmenté de 4 à 8 pour une meilleure stabilité
-        warmup_steps=50,  # Augmenté pour un warmup plus progressif
-        max_steps=1500,
-        learning_rate=1e-4,  # Réduit pour plus de stabilité
+        # Batch size et accumulation
+        per_device_train_batch_size=1,         # Réduit de 2 à 1 pour éviter les OOM
+        gradient_accumulation_steps=16,        # Augmenté pour compenser la réduction du batch size
+        
+        # Learning rate et scheduling
+        learning_rate=1e-4,                    # Réduit pour plus de stabilité
+        warmup_steps=100,                      # Augmenté pour un warmup plus progressif
+        max_steps=1000,                        # Réduit pour éviter le rate limit
+        lr_scheduler_type="cosine",            # Meilleure convergence
+        
+        # Optimisation mémoire
         fp16=not is_bfloat16_supported(),
         bf16=is_bfloat16_supported(),
-        logging_steps=1,
+        gradient_checkpointing=True,
+        max_grad_norm=1.0,                     # Réduit pour plus de stabilité
+        
+        # Autres paramètres
+        logging_steps=5,                       # Réduit la fréquence des logs
         optim="adamw_8bit",
-        weight_decay=0.01,
-        lr_scheduler_type="cosine",
+        weight_decay=0.05,                     # Augmenté pour une meilleure régularisation
         seed=3407,
         output_dir="outputs",
-        gradient_checkpointing=True,
-        torch_compile=False,
-        max_grad_norm=2.0,  # Augmenté de 1.0 à 2.0
         report_to="none"
     )
 
-    # Create optimizer before scheduler
+    # Create optimizer
     optimizer = torch.optim.AdamW(
         model.parameters(),
         lr=training_args.learning_rate,
         weight_decay=training_args.weight_decay
     )
 
-    # Now we can use the optimizer in get_scheduler
+    # Create scheduler
     lr_scheduler = get_scheduler(
-        name="cosine",  # Changé pour correspondre à training_args
+        name="cosine",
         optimizer=optimizer,
         num_warmup_steps=training_args.warmup_steps,
         num_training_steps=training_args.max_steps
@@ -313,4 +319,3 @@ if __name__ == "__main__":
     save_model(merged_model, tokenizer, 'llama_model_merged')
 
     print("Modèle fusionné et sauvegardé avec succès.")
-
