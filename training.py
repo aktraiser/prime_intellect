@@ -50,7 +50,7 @@ def initialize_model(max_seq_length):
         per_device_train_batch_size=1,
         gradient_accumulation_steps=16,  # Plus grand pour compenser le petit batch_size
         warmup_steps=100,
-        max_steps=100,
+        max_steps=2000,
         learning_rate=2e-4,
         fp16=not is_bfloat16_supported(),
         bf16=is_bfloat16_supported(),
