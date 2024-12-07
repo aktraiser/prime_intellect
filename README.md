@@ -68,3 +68,100 @@ The training process automatically:
 ## Support
 
 For any issues or questions, please contact the PrimeIntellect support team or refer to the repository documentation.
+
+# Hugging Face
+## Install 
+```bash
+pip install huggingface_hub
+```
+
+## Config Login User 
+```bash
+huggingface-cli login
+```
+
+## Config User
+```bash
+git config --global user.name « Username »
+git config --global user.email « Email_user »
+```
+
+##Install Git LFS 
+```bash
+apt-get update
+apt-get install git-lfs
+```
+
+## Create Repository on Huggingface
+```bash
+huggingface-cli repo create nom-du-modele --type model
+```
+
+## Clone repository
+```bash
+git clone https://huggingface.co/nom-du-modele
+cd nom-du-modele
+```
+
+## Config Git LFS
+```bash
+git lfs install
+huggingface-cli lfs-enable-largefiles .
+```
+
+## Config tracking LFS
+```bash
+cat > .gitattributes << EOL
+model.safetensors filter=lfs diff=lfs merge=lfs -text
+tokenizer.json filter=lfs diff=lfs merge=lfs -text
+EOL
+```
+```bash
+cat > .gitattributes << EOL
+model-*.safetensors filter=lfs diff=lfs merge=lfs -text
+model.safetensors.index.json filter=lfs diff=lfs merge=lfs -text
+tokenizer.json filter=lfs diff=lfs merge=lfs -text
+EOL
+```
+
+## First add .gitattributes
+```bash
+git add .gitattributes
+git commit -m "Add LFS configuration"
+```
+
+## Copy model files
+```bash
+cp ../llama_model_merged/* .
+```
+
+## Add normal configuration files
+```bash
+git add config.json
+git add generation_config.json
+git add special_tokens_map.json
+git add tokenizer_config.json
+git commit -m "Add configuration files"
+```
+
+## Adding large files with LFS
+```bash
+git add model.safetensors
+git add tokenizer.json
+git commit -m "Add model files with LFS"
+```
+
+```bash
+git add model-*.safetensors
+git add model.safetensors.index.json
+git add tokenizer.json
+git commit -m "Add sharded model files with LFS"
+```
+
+## Push vers Hugging Face
+Before the push, give the right to the token.
+```bash
+git push origin main
+```
+
+
