@@ -59,56 +59,56 @@ def initialize_model(max_seq_length):
 
     return model, tokenizer
 
+# Définition du template de prompt
+prompt_template = """Below is an instruction that describes a task, paired with an input that provides further context. Write a response that appropriately completes the request.
+
+### Instruction:
+Tu es un expert comptable spécialisé dans le conseil aux entreprises. Tu dois fournir une réponse professionnelle et précise basée uniquement sur le contexte fourni.
+
+### Input:
+Type: {content_type}
+Sujet: {title}
+Document: {main_text}
+Question: {questions}
+Source: {source}
+
+### Response:
+{}"""
+
 def initialize_dataset(tokenizer, csv_file):
-    # Charger le fichier CSV
-    df = pd.read_csv(csv_file)
-
-    # Définir le format du prompt
-    prompt_template = """Tu es un expert comptable spécialisé dans le conseil aux entreprises. En te basant uniquement sur le contexte fourni, réponds à la question de manière précise et professionnelle.
-
-### Contexte:
-{title}
-
-### Document de référence:
-{texte}
-
-### Question du client:
-{question}
-
-### Instructions:
-- Base ta réponse uniquement sur les informations fournies dans le document
-- Prend en compte le title de la reponse pour avoir le contexte
-- Si plusieurs contexte sont identique structure une réponse prennant en compte l'ensemble de leurs données de response
-- Fournis une réponse claire et structurée
-- Utilise un langage professionnel adapté au contexte comptable
-- Si une information n'est pas disponible dans le contexte, indique-le clairement
-- Commence ta réponse par un bref résumé de la situation
-- Structure ta réponse avec des points clés si nécessaire
-- Cite les toujours les références spécifiques du document
-- Termine par une conclusion ou recommandation si approprié
-- En cas de concepts techniques, fournis une brève explication
-- Explique les termes techniques
-- Si plusieurs options sont possibles, présente-les de manière structurée
-
-### Réponse de l'expert:
-"""
-
+    # Charger le fichier CSV avec le bon séparateur
+    df = pd.read_csv(csv_file, sep=',')
+    
     EOS_TOKEN = tokenizer.eos_token or '</s>'
-
-    # Formater les données
-    formatted_data = []
-    for _, row in df.iterrows():
-        formatted_data.append({
-            'text': prompt_template.format(
-                title=row['title'],
-                texte=row['main_text'],
-                question=row['questions']
-            ) + row['answers'] + EOS_TOKEN
-        })
-
-    # Créer le dataset Hugging Face
-    dataset = Dataset.from_dict({'text': [d['text'] for d in formatted_data]})
-
+    
+    def formatting_prompts_func(examples):
+        texts = []
+        for content_type, title, main_text, questions, answers, source in zip(
+            examples["content_type"],
+            examples["title"],
+            examples["main_text"],
+            examples["questions"],
+            examples["answers"],
+            examples["source"]
+        ):
+            # Format the input with empty response placeholder
+            text = prompt_template.format(
+                content_type=content_type,
+                title=title,
+                main_text=main_text,
+                questions=questions,
+                source=source,
+                answers=""  # Laissé vide pour l'entraînement
+            ) + answers + EOS_TOKEN  # La réponse est ajoutée après le prompt
+            texts.append(text)
+        return {"text": texts}
+    
+    dataset = df.map(
+        formatting_prompts_func,
+        batched=True,
+        remove_columns=df.columns
+    )
+    
     return dataset
 
 def create_validation_dataset(dataset, val_size=0.1, seed=42):
@@ -145,22 +145,19 @@ def evaluate_model(model, val_dataset, tokenizer, batch_size=1):
     return total_loss / total_batches if total_batches > 0 else float('inf')
 
 def save_model(model, tokenizer, output_dir):
-    """Sauvegarde le modèle avec Unsloth LoRA"""
-    try:
-        logger.info("Saving model with Unsloth...")
-        # Pour Unsloth, on utilise directement save_pretrained
-        model.save_pretrained(
-            output_dir,
-            safe_serialization=True,
-            max_shard_size="5GB"
-        )
-        
-        # Sauvegarder le tokenizer
-        tokenizer.save_pretrained(output_dir)
-        logger.info("Model saved successfully!")
-    except Exception as e:
-        logger.error(f"Error saving model: {str(e)}")
-        raise
+    """Sauvegarde le modèle fusionné"""
+    # Créer le répertoire s'il n'existe pas
+    os.makedirs(output_dir, exist_ok=True)
+    
+    # Chemin absolu du répertoire de sortie
+    abs_output_dir = os.path.abspath(output_dir)
+    
+    logger.info(f"Saving merged model to: {abs_output_dir}")
+    model.save_pretrained(output_dir)
+    tokenizer.save_pretrained(output_dir)
+    logger.info(f"Model and tokenizer saved successfully in: {abs_output_dir}")
+    
+    return abs_output_dir
 
 def save_checkpoint(model, optimizer, scheduler, loss, step, checkpoint_dir, keep_last_n=3):
     """Sauvegarde un checkpoint du modèle"""
@@ -328,24 +325,30 @@ if __name__ == "__main__":
     eval_loss = evaluate_model(model, val_dataset, tokenizer)
     print(f"Eval Loss = {eval_loss:.4f}")
     
-    # Sauvegarder le modèle
-    save_model(model, tokenizer, 'peft_model')
-
+    # Sauvegarde du modèle
+    merged_model = model.merge_and_unload()
+    merged_model_path = save_model(merged_model, tokenizer, 'llama_model_merged')
+    logger.info(f"Merged model saved at: {merged_model_path}")
+    
+    # Export pour Ollama
+    ollama_model_path = save_model_for_ollama(merged_model, tokenizer, 'ollama_model_export')
+    logger.info(f"Ollama model exported to: {ollama_model_path}")
+    
+    # Résumé final
+    logger.info("\nModel locations summary:")
+    logger.info(f"1. Training checkpoints: {os.path.abspath('outputs')}")
+    logger.info(f"2. Final merged model: {merged_model_path}")
+    logger.info(f"3. Ollama compatible model: {ollama_model_path}")
+    
     # Statistiques finales
     end_time = time.time()
     used_memory = torch.cuda.memory_reserved() / 1024**3
-    used_memory_for_lora = used_memory - start_gpu_memory
-    used_percentage = used_memory / max_memory * 100
-    lora_percentage = used_memory_for_lora / max_memory * 100
+    used_memory_for_lora = used_memory - torch.cuda.memory_reserved(0) / 1024**3
+    used_percentage = used_memory / torch.cuda.get_device_properties(0).total_memory / (1024**3) * 100
+    lora_percentage = used_memory_for_lora / torch.cuda.get_device_properties(0).total_memory / (1024**3) * 100
     print(f"{end_time - start_time} seconds used for training.")
     print(f"{round((end_time - start_time)/60, 2)} minutes used for training.")
     print(f"Peak reserved memory = {used_memory} GB.")
     print(f"Peak reserved memory for training = {used_memory_for_lora} GB.")
     print(f"Peak reserved memory % of max memory = {used_percentage} %.")
     print(f"Peak reserved memory for training % of max memory = {lora_percentage} %.")
-
-    # Fusionner les poids LoRA avec le modèle de base et sauvegarder
-    merged_model = model.merge_and_unload()
-    save_model(merged_model, tokenizer, 'llama_model_merged')
-
-    print("Modèle fusionné et sauvegardé avec succès.")
