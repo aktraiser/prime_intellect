@@ -12,6 +12,10 @@ Open your terminal and navigate to the directory containing the downloaded key. 
 ```bash
 chmod 400 [your-key-name].pem
 ```
+Remove the old key
+```bash
+ssh-keygen -R "[your-key-name]:pem"
+```
 
 ### 3. Connect to VM
 Use SSH to connect to your VM:
@@ -31,7 +35,7 @@ git clone https://github.com/aktraiser/prime_intellect.git
 ### 2. Prepare Scripts
 Make all scripts executable:
 ```bash
-find prime-intellect-test -type f -name "*.sh" -exec chmod +x {} \;
+find prime_intellect -type f -name "*.sh" -exec chmod +x {} \;
 ```
 
 ### 3. Managing Directories
