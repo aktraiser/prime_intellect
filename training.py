@@ -76,19 +76,18 @@ Source: {source}
 {}"""
 
 def initialize_dataset(tokenizer, dataset_path):
+    # Charger le dataset
     df = pd.read_csv(dataset_path)
-    
-    # Convertir le DataFrame en Dataset Hugging Face
     dataset = Dataset.from_pandas(df)
     
-    def formatting_prompts_func(examples, batched=True):
+    def formatting_prompts_func(examples):
         return {
             "text": [
-                f"### Instruction: {instruction}\n### Input: {input}\n### Response: {output}"
-                for instruction, input, output in zip(
-                    examples['instruction'],
-                    examples['input'],
-                    examples['output']
+                f"### Instruction: {question}\n### Input: {text}\n### Response: {answer}"
+                for text, question, answer in zip(
+                    examples['main_text'],
+                    examples['questions'],
+                    examples['answers']
                 )
             ]
         }
@@ -99,7 +98,7 @@ def initialize_dataset(tokenizer, dataset_path):
         remove_columns=dataset.column_names
     )
     
-    return dataset
+    return formatted_dataset
 
 def create_validation_dataset(dataset, val_size=0.1, seed=42):
     """Crée un dataset de validation à partir du dataset d'entraînement"""
