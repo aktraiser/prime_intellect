@@ -304,7 +304,7 @@ if __name__ == "__main__":
     model, tokenizer = initialize_model(max_seq_length)
 
     # Charger les données
-    dataset = initialize_dataset(tokenizer, 'dataset2_comptable.csv')
+    dataset = initialize_dataset(tokenizer, 'dataset_compatable.csv')
     train_dataset, val_dataset = create_validation_dataset(dataset)
 
     # Créer le dossier pour les checkpoints
