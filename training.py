@@ -75,38 +75,28 @@ Source: {source}
 ### Response:
 {}"""
 
-def initialize_dataset(tokenizer, csv_file):
-    # Charger le fichier CSV avec le bon séparateur
-    df = pd.read_csv(csv_file, sep=',')
+def initialize_dataset(tokenizer, dataset_path):
+    df = pd.read_csv(dataset_path)
     
-    EOS_TOKEN = tokenizer.eos_token or '</s>'
+    # Convertir le DataFrame en Dataset Hugging Face
+    dataset = Dataset.from_pandas(df)
     
-    def formatting_prompts_func(examples):
-        texts = []
-        for content_type, title, main_text, questions, answers, source in zip(
-            examples["content_type"],
-            examples["title"],
-            examples["main_text"],
-            examples["questions"],
-            examples["answers"],
-            examples["source"]
-        ):
-            # Format the input with empty response placeholder
-            text = prompt_template.format(
-                content_type=content_type,
-                title=title,
-                main_text=main_text,
-                questions=questions,
-                source=source,
-                answers=""  # Laissé vide pour l'entraînement
-            ) + answers + EOS_TOKEN  # La réponse est ajoutée après le prompt
-            texts.append(text)
-        return {"text": texts}
+    def formatting_prompts_func(examples, batched=True):
+        return {
+            "text": [
+                f"### Instruction: {instruction}\n### Input: {input}\n### Response: {output}"
+                for instruction, input, output in zip(
+                    examples['instruction'],
+                    examples['input'],
+                    examples['output']
+                )
+            ]
+        }
     
-    dataset = df.map(
+    formatted_dataset = dataset.map(
         formatting_prompts_func,
         batched=True,
-        remove_columns=df.columns
+        remove_columns=dataset.column_names
     )
     
     return dataset
