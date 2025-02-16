@@ -23,7 +23,7 @@ def initialize_model(max_seq_length):
     
     logger.info("Loading model with Flash Attention 2...")
     model, tokenizer = FastLanguageModel.from_pretrained(
-        model_name="unsloth/Meta-Llama-3.1-8B",
+        model_name="unsloth/DeepSeek-R1-Distill-Llama-8B-unsloth-bnb-4bit",
         max_seq_length=max_seq_length,
         dtype=dtype,
         load_in_4bit=False,  # Pas de quantification 4-bit
