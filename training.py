@@ -134,17 +134,34 @@ def evaluate_model(model, val_dataset, tokenizer, batch_size=1):
     return total_loss / total_batches if total_batches > 0 else float('inf')
 
 def save_model(model, tokenizer, output_dir):
-    """Sauvegarde le modèle fusionné"""
+    """Sauvegarde le modèle au format Hugging Face"""
     # Créer le répertoire s'il n'existe pas
     os.makedirs(output_dir, exist_ok=True)
     
     # Chemin absolu du répertoire de sortie
     abs_output_dir = os.path.abspath(output_dir)
     
-    logger.info(f"Saving merged model to: {abs_output_dir}")
-    model.save_pretrained(output_dir)
+    logger.info(f"Saving model to Hugging Face format in: {abs_output_dir}")
+    
+    # Sauvegarder le modèle en format shardé
+    model.save_pretrained(
+        output_dir,
+        safe_serialization=True,  # Utilise safetensors
+        max_shard_size="4GB"      # Limite la taille des shards à 4GB
+    )
+    
+    # Sauvegarder le tokenizer et les fichiers de configuration
     tokenizer.save_pretrained(output_dir)
-    logger.info(f"Model and tokenizer saved successfully in: {abs_output_dir}")
+    
+    # Créer le fichier .gitattributes pour Git LFS
+    gitattributes_content = """
+*.safetensors filter=lfs diff=lfs merge=lfs -text
+tokenizer.json filter=lfs diff=lfs merge=lfs -text
+"""
+    with open(os.path.join(output_dir, ".gitattributes"), "w") as f:
+        f.write(gitattributes_content.strip())
+    
+    logger.info(f"Model, tokenizer, and configuration files saved successfully in: {abs_output_dir}")
     
     return abs_output_dir
 
@@ -314,20 +331,15 @@ if __name__ == "__main__":
     eval_loss = evaluate_model(model, val_dataset, tokenizer)
     print(f"Eval Loss = {eval_loss:.4f}")
     
-    # Sauvegarde du modèle
+    # Sauvegarde du modèle au format Hugging Face
     merged_model = model.merge_and_unload()
-    merged_model_path = save_model(merged_model, tokenizer, 'llama_model_merged')
-    logger.info(f"Merged model saved at: {merged_model_path}")
-    
-    # Export pour Ollama
-    ollama_model_path = save_model_for_ollama(merged_model, tokenizer, 'ollama_model_export')
-    logger.info(f"Ollama model exported to: {ollama_model_path}")
+    model_path = save_model(merged_model, tokenizer, 'hf_model_export')
+    logger.info(f"Model saved in Hugging Face format at: {model_path}")
     
     # Résumé final
     logger.info("\nModel locations summary:")
     logger.info(f"1. Training checkpoints: {os.path.abspath('outputs')}")
-    logger.info(f"2. Final merged model: {merged_model_path}")
-    logger.info(f"3. Ollama compatible model: {ollama_model_path}")
+    logger.info(f"2. Final model (Hugging Face format): {model_path}")
     
     # Statistiques finales
     end_time = time.time()
