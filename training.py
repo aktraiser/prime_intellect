@@ -60,24 +60,20 @@ def initialize_model(max_seq_length):
     return model, tokenizer
 
 # Définition du template de prompt
-prompt_template = """<|system|>Tu es un assistant spécialisé en comptabilité et conseil aux entreprises. Tu dois fournir des réponses précises et professionnelles basées sur les documents comptables et réglementaires.</|system|>
+prompt_template = """Below is an instruction that describes a task, paired with an input that provides further context. Write a response that appropriately completes the request.
 
-<|user|>
-Document à analyser:
-{main_text}
+### Instruction:
+Tu es un expert comptable spécialisé dans le conseil aux entreprises. Tu dois fournir une réponse professionnelle et précise basée uniquement sur le contexte fourni.
 
+### Input:
+Type: {content_type}
+Sujet: {title}
+Document: {main_text}
 Question: {questions}
+Source: {source}
 
-Contexte additionnel:
-- Type: {content_type}
-- Source: {source}
-- Référence: {title}
-</|user|>
-
-<|assistant|>
-En tant qu'expert comptable, je vais analyser votre demande :
-
-{answer}</|assistant|>"""
+### Response:
+{}"""
 
 def initialize_dataset(tokenizer, dataset_path):
     # Charger le dataset
@@ -85,17 +81,10 @@ def initialize_dataset(tokenizer, dataset_path):
     dataset = Dataset.from_pandas(df)
     
     def formatting_prompts_func(examples):
-        """Formate les exemples pour le fine-tuning avec un format chat structuré"""
+        """Formate les exemples pour le fine-tuning"""
         return {
             "text": [
-                prompt_template.format(
-                    content_type=examples.get('content_type', 'Document comptable'),
-                    title=examples.get('title', 'Non spécifié'),
-                    main_text=text.strip(),
-                    questions=question.strip(),
-                    source=examples.get('source', 'Documentation officielle'),
-                    answer=answer.strip()
-                )
+                f"### Instruction:\nEn tant qu'expert comptable, réponds à la question suivante de manière professionnelle.\n\n### Input:\n{text}\n\n### Question:\n{question}\n\n### Response:\n{answer}"
                 for text, question, answer in zip(
                     examples['main_text'],
                     examples['questions'],
