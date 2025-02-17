@@ -60,20 +60,24 @@ def initialize_model(max_seq_length):
     return model, tokenizer
 
 # Définition du template de prompt
-prompt_template = """Below is an instruction that describes a task, paired with an input that provides further context. Write a response that appropriately completes the request.
+prompt_template = """<|system|>Tu es un assistant spécialisé en comptabilité et conseil aux entreprises. Tu dois fournir des réponses précises et professionnelles basées sur les documents comptables et réglementaires.</|system|>
 
-### Instruction:
-Tu es un expert comptable spécialisé dans le conseil aux entreprises. Tu dois fournir une réponse professionnelle et précise basée uniquement sur le contexte fourni.
+<|user|>
+Document à analyser:
+{main_text}
 
-### Input:
-Type: {content_type}
-Sujet: {title}
-Document: {main_text}
 Question: {questions}
-Source: {source}
 
-### Response:
-{}"""
+Contexte additionnel:
+- Type: {content_type}
+- Source: {source}
+- Référence: {title}
+</|user|>
+
+<|assistant|>
+En tant qu'expert comptable, je vais analyser votre demande :
+
+{}</|assistant|>"""
 
 def initialize_dataset(tokenizer, dataset_path):
     # Charger le dataset
@@ -81,9 +85,16 @@ def initialize_dataset(tokenizer, dataset_path):
     dataset = Dataset.from_pandas(df)
     
     def formatting_prompts_func(examples):
+        """Formate les exemples pour le fine-tuning avec un format chat structuré"""
         return {
             "text": [
-                f"### Instruction: {question}\n### Input: {text}\n### Response: {answer}"
+                prompt_template.format(
+                    content_type=examples.get('content_type', 'Document comptable'),
+                    title=examples.get('title', 'Non spécifié'),
+                    main_text=text.strip(),
+                    questions=question.strip(),
+                    source=examples.get('source', 'Documentation officielle')
+                ).replace("{}", answer.strip())
                 for text, question, answer in zip(
                     examples['main_text'],
                     examples['questions'],
@@ -262,7 +273,7 @@ def initialize_trainer(model, tokenizer, dataset, max_seq_length):
         per_device_train_batch_size=1,
         gradient_accumulation_steps=16,
         warmup_steps=10,
-        max_steps=8,
+        max_steps=1500,
         learning_rate=1e-4,
         fp16=False,  # Désactivé pour stabilité
         bf16=True,   # Utilisé si disponible
