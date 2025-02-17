@@ -77,7 +77,7 @@ Contexte additionnel:
 <|assistant|>
 En tant qu'expert comptable, je vais analyser votre demande :
 
-{}</|assistant|>"""
+{answer}</|assistant|>"""
 
 def initialize_dataset(tokenizer, dataset_path):
     # Charger le dataset
@@ -93,8 +93,9 @@ def initialize_dataset(tokenizer, dataset_path):
                     title=examples.get('title', 'Non spécifié'),
                     main_text=text.strip(),
                     questions=question.strip(),
-                    source=examples.get('source', 'Documentation officielle')
-                ).replace("{}", answer.strip())
+                    source=examples.get('source', 'Documentation officielle'),
+                    answer=answer.strip()
+                )
                 for text, question, answer in zip(
                     examples['main_text'],
                     examples['questions'],
