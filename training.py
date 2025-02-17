@@ -262,7 +262,7 @@ def initialize_trainer(model, tokenizer, dataset, max_seq_length):
         per_device_train_batch_size=1,
         gradient_accumulation_steps=16,
         warmup_steps=10,
-        max_steps=1500,
+        max_steps=8,
         learning_rate=1e-4,
         fp16=False,  # Désactivé pour stabilité
         bf16=True,   # Utilisé si disponible
